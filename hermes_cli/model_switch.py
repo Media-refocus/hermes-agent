@@ -118,6 +118,87 @@ def _bare_custom_provider_def(current_base_url: str) -> Optional[ProviderDef]:
     )
 
 
+def _provider_config_disabled(user_providers: dict | None, slug: str) -> bool:
+    """Return True when ``providers.<slug>`` explicitly disables a provider.
+
+    ``providers:`` normally declares user endpoints, but fleet operators also
+    need a non-destructive way to hide built-in providers from ``/model``
+    without deleting credentials. A row such as ``providers.anthropic.enabled:
+    false`` suppresses that provider from picker/list output while leaving auth
+    files intact.
+    """
+    if not isinstance(user_providers, dict):
+        return False
+    cfg = user_providers.get((slug or "").strip().lower())
+    if not isinstance(cfg, dict):
+        return False
+
+    def _falsey(value) -> bool:
+        if isinstance(value, bool):
+            return value is False
+        if isinstance(value, str):
+            return value.strip().lower() in {"0", "false", "no", "off", "disabled"}
+        return False
+
+    if "enabled" in cfg and _falsey(cfg.get("enabled")):
+        return True
+    disabled = cfg.get("disabled")
+    if isinstance(disabled, bool):
+        return disabled
+    if isinstance(disabled, str):
+        return disabled.strip().lower() in {"1", "true", "yes", "on", "disabled"}
+    return False
+
+
+def _configured_provider_model_ids_for_listing(
+    user_providers: dict | None,
+    slug: str,
+) -> list[str]:
+    """Return explicit ``providers.<slug>.models`` for listing overrides.
+
+    If a built-in provider also has credentials, the built-in live catalog would
+    normally win and the user-config row would be skipped as a duplicate. When
+    the config sets ``discover_models: false`` we honor the explicit model set
+    instead. This is useful for provider-side aliases that are callable but not
+    returned by ``/v1/models`` (for example ``openrouter/fusion``), and for
+    curated fleet pickers that should not expose a provider's entire catalog.
+    """
+    if not isinstance(user_providers, dict):
+        return []
+    cfg = user_providers.get((slug or "").strip().lower())
+    if not isinstance(cfg, dict):
+        return []
+    if _provider_config_disabled(user_providers, slug):
+        return []
+
+    discover = cfg.get("discover_models", True)
+    if isinstance(discover, str):
+        discover = discover.strip().lower() not in {"0", "false", "no", "off"}
+    if discover is not False:
+        return []
+
+    models: list[str] = []
+    for key in ("default_model", "model"):
+        value = cfg.get(key)
+        if isinstance(value, str) and value.strip() and value.strip() not in models:
+            models.append(value.strip())
+
+    cfg_models = cfg.get("models", [])
+    if isinstance(cfg_models, dict):
+        for mid in cfg_models:
+            if isinstance(mid, str) and mid.strip() and mid.strip() not in models:
+                models.append(mid.strip())
+    elif isinstance(cfg_models, (list, tuple)):
+        for item in cfg_models:
+            if isinstance(item, str) and item.strip() and item.strip() not in models:
+                models.append(item.strip())
+            elif isinstance(item, dict):
+                name = item.get("name")
+                if isinstance(name, str) and name.strip() and name.strip() not in models:
+                    models.append(name.strip())
+    return models
+
+
 # ---------------------------------------------------------------------------
 # Non-agentic model warning
 # ---------------------------------------------------------------------------
@@ -1687,6 +1768,8 @@ def list_authenticated_providers(
     from hermes_cli.models import _AGGREGATOR_PROVIDERS as _AGG_PROVIDERS
     from hermes_cli.providers import ALIASES as _PROVIDER_ALIAS_TABLE
     for hermes_id, mdev_id in PROVIDER_TO_MODELS_DEV.items():
+        if _provider_config_disabled(user_providers, hermes_id):
+            continue
         # Skip vendor names that are merely aliases routing through an
         # aggregator (e.g. bare "openai" → "openrouter"). These are NOT
         # directly-routable providers: emitting them as their own picker
@@ -1759,15 +1842,24 @@ def list_authenticated_providers(
             model_ids = curated.get(hermes_id, [])
             if hermes_id in _MODELS_DEV_PREFERRED:
                 model_ids = _merge_with_models_dev(hermes_id, model_ids)
-        # A providers.<built-in>.models block extends the provider's discovered
-        # catalog. Section 3 cannot emit it later because this built-in row owns
-        # the slug, so merge declarations here before applying max_models.
-        configured_models: list[str] = []
-        if isinstance(user_providers, dict):
-            configured = user_providers.get(hermes_id)
-            if isinstance(configured, dict):
-                configured_models = _declared_model_ids(configured.get("models"))
-        model_ids = list(dict.fromkeys([*configured_models, *model_ids]))
+        configured_model_ids = _configured_provider_model_ids_for_listing(user_providers, hermes_id)
+        source = "built-in"
+        is_user_defined = False
+        if configured_model_ids:
+            # ``discover_models: false`` makes the explicit list authoritative.
+            model_ids = configured_model_ids
+            source = "user-config"
+            is_user_defined = True
+        else:
+            # Otherwise explicit declarations extend the discovered catalog.
+            # Section 3 cannot emit them later because this built-in row owns
+            # the slug, so merge before applying max_models.
+            configured_models: list[str] = []
+            if isinstance(user_providers, dict):
+                configured = user_providers.get(hermes_id)
+                if isinstance(configured, dict):
+                    configured_models = _declared_model_ids(configured.get("models"))
+            model_ids = list(dict.fromkeys([*configured_models, *model_ids]))
         total = len(model_ids)
         if hermes_id in _UNCAPPED_PICKER_PROVIDERS:
             top = model_ids  # Aggregator: show full catalog regardless of max_models
@@ -1782,10 +1874,10 @@ def list_authenticated_providers(
             "slug": slug,
             "name": display_name,
             "is_current": slug == current_provider or mdev_id == current_provider,
-            "is_user_defined": False,
+            "is_user_defined": is_user_defined,
             "models": top,
             "total_models": total,
-            "source": "built-in",
+            "source": source,
         })
         seen_slugs.add(slug.lower())
         seen_mdev_ids.add(mdev_id)
@@ -1806,6 +1898,8 @@ def list_authenticated_providers(
 
         # Resolve Hermes slug — e.g. "github-copilot" → "copilot"
         hermes_slug = _mdev_to_hermes.get(pid, pid)
+        if _provider_config_disabled(user_providers, pid) or _provider_config_disabled(user_providers, hermes_slug):
+            continue
         if hermes_slug.lower() in seen_slugs:
             continue
 
@@ -1946,6 +2040,13 @@ def list_authenticated_providers(
                 model_ids = curated.get(hermes_slug, []) or curated.get(pid, [])
                 if hermes_slug in _MODELS_DEV_PREFERRED:
                     model_ids = _merge_with_models_dev(hermes_slug, model_ids)
+        configured_model_ids = _configured_provider_model_ids_for_listing(user_providers, hermes_slug)
+        source = "hermes"
+        is_user_defined = False
+        if configured_model_ids:
+            model_ids = configured_model_ids
+            source = "user-config"
+            is_user_defined = True
         total = len(model_ids)
         if hermes_slug in _UNCAPPED_PICKER_PROVIDERS:
             top = model_ids  # Aggregator: show full catalog regardless of max_models
@@ -1956,10 +2057,10 @@ def list_authenticated_providers(
             "slug": hermes_slug,
             "name": get_label(hermes_slug),
             "is_current": hermes_slug == current_provider or pid == current_provider,
-            "is_user_defined": False,
+            "is_user_defined": is_user_defined,
             "models": top,
             "total_models": total,
-            "source": "hermes",
+            "source": source,
         })
         seen_slugs.add(pid.lower())
         seen_slugs.add(hermes_slug.lower())
@@ -1975,6 +2076,8 @@ def list_authenticated_providers(
         _canon_provs = []
 
     for _cp in _canon_provs:
+        if _provider_config_disabled(user_providers, _cp.slug):
+            continue
         if _cp.slug.lower() in seen_slugs:
             continue
 
@@ -2022,6 +2125,13 @@ def list_authenticated_providers(
             _cp_model_ids = cached_provider_model_ids(_cp.slug)
             if not _cp_model_ids:
                 _cp_model_ids = curated.get(_cp.slug, [])
+        configured_model_ids = _configured_provider_model_ids_for_listing(user_providers, _cp.slug)
+        source = "canonical"
+        is_user_defined = False
+        if configured_model_ids:
+            _cp_model_ids = configured_model_ids
+            source = "user-config"
+            is_user_defined = True
         _cp_total = len(_cp_model_ids)
         _cp_top = _cp_model_ids[:max_models] if max_models is not None else _cp_model_ids
 
@@ -2029,10 +2139,10 @@ def list_authenticated_providers(
             "slug": _cp.slug,
             "name": _cp.label,
             "is_current": _cp.slug == current_provider,
-            "is_user_defined": False,
+            "is_user_defined": is_user_defined,
             "models": _cp_top,
             "total_models": _cp_total,
-            "source": "canonical",
+            "source": source,
         })
         seen_slugs.add(_cp.slug.lower())
         _record_builtin_endpoint(_cp.slug)
@@ -2048,6 +2158,12 @@ def list_authenticated_providers(
     if user_providers and isinstance(user_providers, dict):
         for ep_name, ep_cfg in user_providers.items():
             if not isinstance(ep_cfg, dict):
+                continue
+            # Explicitly disabled providers must never surface, even via the
+            # user-config section (a built-in we suppressed above would
+            # otherwise reappear here as a user endpoint).
+            if _provider_config_disabled(user_providers, ep_name):
+                seen_slugs.add(ep_name.lower())
                 continue
             # Skip if this slug was already emitted (e.g. canonical provider
             # with the same name) or will be picked up by section 4.

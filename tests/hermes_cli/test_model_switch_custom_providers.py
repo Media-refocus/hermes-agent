@@ -1326,3 +1326,27 @@ def test_resolve_custom_provider_bare_custom_self_heal_passes_key_env():
 
     assert resolved is not None
     assert resolved.api_key_env_vars == ("XIAOMI_MIMO_API_KEY",)
+def test_builtin_provider_enabled_false_is_hidden_from_listing():
+    from hermes_cli.model_switch import _provider_config_disabled
+
+    providers = {"zai": {"enabled": False, "models": ["glm-5.2"]}}
+
+    assert _provider_config_disabled(providers, "zai") is True
+
+
+def test_builtin_provider_discovery_false_uses_explicit_models():
+    from hermes_cli.model_switch import _configured_provider_model_ids_for_listing
+
+    providers = {
+        "zai": {
+            "discover_models": False,
+            "default_model": "glm-5.2",
+            "models": ["glm-5.2", {"name": "glm-5.1"}],
+        }
+    }
+
+    assert _configured_provider_model_ids_for_listing(providers, "zai") == [
+        "glm-5.2",
+        "glm-5.1",
+    ]
+
