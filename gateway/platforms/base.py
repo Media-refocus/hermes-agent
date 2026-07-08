@@ -1365,6 +1365,8 @@ SUPPORTED_DOCUMENT_TYPES = {
     ".pdf": "application/pdf",
     ".md": "text/markdown",
     ".txt": "text/plain",
+    ".html": "text/html",
+    ".htm": "text/html",
     ".csv": "text/csv",
     ".log": "text/plain",
     ".json": "application/json",

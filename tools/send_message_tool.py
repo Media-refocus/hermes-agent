@@ -489,15 +489,20 @@ def _handle_send(args):
 
     try:
         from model_tools import _run_async
+        send_kwargs = {
+            "thread_id": thread_id,
+            "media_files": media_files,
+            "force_document": force_document_attachments,
+        }
+        if platform_name == "telegram" and thread_id is not None and is_explicit:
+            send_kwargs["require_thread_exists"] = True
         result = _run_async(
             _send_to_platform(
                 platform,
                 pconfig,
                 chat_id,
                 cleaned_message,
-                thread_id=thread_id,
-                media_files=media_files,
-                force_document=force_document_attachments,
+                **send_kwargs,
             )
         )
         if used_home_channel and isinstance(result, dict) and result.get("success"):
@@ -777,7 +782,16 @@ async def _send_via_adapter(
     }
 
 
-async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None, media_files=None, force_document=False):
+async def _send_to_platform(
+    platform,
+    pconfig,
+    chat_id,
+    message,
+    thread_id=None,
+    media_files=None,
+    force_document=False,
+    require_thread_exists=False,
+):
     """Route a message to the appropriate platform sender.
 
     Long messages are automatically chunked to fit within platform limits
@@ -857,6 +871,7 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
             thread_id=thread_id,
             disable_link_previews=disable_link_previews,
             force_document=force_document,
+            require_thread_exists=require_thread_exists,
         )
 
     # --- Discord: chunked delivery via the registry's standalone_sender_fn.
@@ -1114,7 +1129,16 @@ def _is_telegram_thread_not_found(error: Exception) -> bool:
     return "thread not found" in str(error).lower()
 
 
-async def _send_telegram(token, chat_id, message, media_files=None, thread_id=None, disable_link_previews=False, force_document=False):
+async def _send_telegram(
+    token,
+    chat_id,
+    message,
+    media_files=None,
+    thread_id=None,
+    disable_link_previews=False,
+    force_document=False,
+    require_thread_exists=False,
+):
     """Send via Telegram Bot API (one-shot, no polling needed).
 
     Applies markdown→MarkdownV2 formatting (same as the gateway adapter)
@@ -1250,6 +1274,10 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
                     # message still delivers (matching the gateway adapter's
                     # fallback behaviour, issue #27012).
                     if _is_telegram_thread_not_found(md_error) and text_kwargs.get("message_thread_id") is not None:
+                        if require_thread_exists:
+                            return _error(
+                                f"Telegram thread {thread_id} not found for chat {chat_id}; refusing to retry without message_thread_id"
+                            )
                         logger.warning(
                             "Thread %s not found in _send_telegram, retrying without message_thread_id",
                             text_kwargs.get("message_thread_id"),
@@ -1346,6 +1374,10 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
                             )
                     except Exception as media_err:
                         if _is_telegram_thread_not_found(media_err) and media_kwargs.get("message_thread_id"):
+                            if require_thread_exists:
+                                return _error(
+                                    f"Telegram thread {thread_id} not found for chat {chat_id}; refusing to retry media without message_thread_id"
+                                )
                             # Thread not found for media — retry without
                             # message_thread_id (issue #27012).
                             logger.warning(

@@ -22,6 +22,7 @@ def _make_adapter(
     group_allowed_chats=None,
     guest_mode=None,
     observe_unmentioned_group_messages=None,
+    no_reactive_reply_markers=None,
     bot_username="hermes_bot",
 ):
     from plugins.platforms.telegram.adapter import TelegramAdapter
@@ -39,6 +40,11 @@ def _make_adapter(
         extra["exclusive_bot_mentions"] = exclusive_bot_mentions
     if ignored_threads is not None:
         extra["ignored_threads"] = ignored_threads
+    else:
+        # Keep unit tests isolated from TELEGRAM_IGNORED_THREADS in the parent
+        # environment; production adapters without this explicit key still fall
+        # back to the env var.
+        extra["ignored_threads"] = []
     if allowed_topics is not None:
         extra["allowed_topics"] = allowed_topics
     else:
@@ -65,6 +71,8 @@ def _make_adapter(
         extra["guest_mode"] = guest_mode
     if observe_unmentioned_group_messages is not None:
         extra["observe_unmentioned_group_messages"] = observe_unmentioned_group_messages
+    if no_reactive_reply_markers is not None:
+        extra["no_reactive_reply_markers"] = no_reactive_reply_markers
 
     adapter = object.__new__(TelegramAdapter)
     adapter.platform = Platform.TELEGRAM
@@ -157,6 +165,21 @@ def test_group_messages_can_be_opened_via_config():
     adapter = _make_adapter(require_mention=False)
 
     assert adapter._should_process_message(_group_message("hello everyone")) is True
+
+
+def test_no_reactive_reply_marker_is_never_dispatched_even_in_free_response_group():
+    adapter = _make_adapter(
+        require_mention=False,
+        free_response_chats=["-100"],
+        no_reactive_reply_markers=["[NO_REACTIVE_REPLY]"],
+    )
+
+    assert adapter._should_process_message(
+        _group_message("[GOVERNANCE_REPORT][NO_REACTIVE_REPLY]\nAuditor report")
+    ) is False
+    assert adapter._should_observe_unmentioned_group_message(
+        _group_message("[GOVERNANCE_REPORT][NO_REACTIVE_REPLY]\nAuditor report")
+    ) is False
 
 
 def test_unmentioned_group_messages_can_be_observed_without_dispatching():

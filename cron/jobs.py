@@ -33,7 +33,7 @@ except ImportError:  # pragma: no cover - non-Windows
     msvcrt = None
 from datetime import datetime, timedelta
 from pathlib import Path
-from hermes_constants import get_hermes_home
+from hermes_constants import get_hermes_home, parse_reasoning_effort
 from typing import Optional, Dict, List, Any, Set, Tuple, Union
 
 logger = logging.getLogger(__name__)
@@ -930,6 +930,21 @@ def save_jobs(jobs: List[Dict[str, Any]]):
         _save_jobs_unlocked(jobs)
 
 
+def _normalize_reasoning_effort(reasoning_effort: Any) -> Optional[str]:
+    """Normalize and validate an optional per-job reasoning effort."""
+    if reasoning_effort in {None, "", False}:
+        return None
+    normalized = str(reasoning_effort).strip().lower()
+    if not normalized:
+        return None
+    if parse_reasoning_effort(normalized) is None:
+        raise ValueError(
+            "Invalid reasoning_effort: "
+            f"{reasoning_effort!r}. Use one of: none, minimal, low, medium, high, xhigh, max, ultra."
+        )
+    return normalized
+
+
 def _normalize_workdir(workdir: Optional[str]) -> Optional[str]:
     """Normalize and validate a cron job workdir.
 
@@ -1078,6 +1093,7 @@ def create_job(
     model: Optional[str] = None,
     provider: Optional[str] = None,
     base_url: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
     script: Optional[str] = None,
     context_from: Optional[Union[str, List[str]]] = None,
     enabled_toolsets: Optional[List[str]] = None,
@@ -1101,6 +1117,9 @@ def create_job(
         model: Optional per-job model override
         provider: Optional per-job provider override
         base_url: Optional per-job base URL override
+        reasoning_effort: Optional per-job reasoning effort override
+                (none|minimal|low|medium|high|xhigh|max|ultra). When unset, the
+                scheduler uses the profile-level agent.reasoning_effort.
         script: Optional path to a script whose stdout feeds the job. With
                 ``no_agent=True`` the script IS the job — its stdout is
                 delivered verbatim. Without ``no_agent``, its stdout is
@@ -1153,6 +1172,7 @@ def create_job(
     normalized_model = _normalize_job_optional_text(model)
     normalized_provider = _normalize_job_optional_text(provider)
     normalized_base_url = _normalize_job_optional_text(base_url, strip_trailing_slash=True)
+    normalized_reasoning_effort = _normalize_reasoning_effort(reasoning_effort)
     normalized_script = str(script).strip() if isinstance(script, str) else None
     normalized_script = normalized_script or None
     normalized_toolsets = [str(t).strip() for t in enabled_toolsets if str(t).strip()] if enabled_toolsets else None
@@ -1225,6 +1245,7 @@ def create_job(
         "provider_snapshot": provider_snapshot,
         "model_snapshot": model_snapshot,
         "base_url": normalized_base_url,
+        "reasoning_effort": normalized_reasoning_effort,
         "script": normalized_script,
         "no_agent": normalized_no_agent,
         "context_from": context_from,
@@ -1343,6 +1364,11 @@ def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]
         for i, job in enumerate(jobs):
             if job["id"] != job_id:
                 continue
+
+            # Validate / normalize reasoning_effort if present in updates. Empty
+            # string or None both mean "clear the field" (inherit profile default).
+            if "reasoning_effort" in updates:
+                updates["reasoning_effort"] = _normalize_reasoning_effort(updates["reasoning_effort"])
 
             # Validate / normalize workdir if present in updates.  Empty string
             # or None both mean "clear the field" (restore old behaviour).

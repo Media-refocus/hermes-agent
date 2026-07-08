@@ -32,7 +32,7 @@ except ImportError:
     except ImportError:
         msvcrt = None
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List, Optional, cast
 
 # Add parent directory to path for imports BEFORE repo-level imports.
 # Without this, standalone invocations (e.g. after `hermes update` reloads
@@ -3099,7 +3099,8 @@ def run_job(
 
         # Reasoning config is resolved after provider authentication so an auth
         # fallback can first replace the primary model with its configured model.
-        from hermes_constants import resolve_reasoning_config
+        # A per-job override remains authoritative once the final model is known.
+        from hermes_constants import parse_reasoning_effort, resolve_reasoning_config
 
         # Prefill messages from env or config.yaml. The top-level
         # prefill_messages_file key is canonical; agent.prefill_messages_file is
@@ -3129,7 +3130,10 @@ def run_job(
         max_iterations = _cfg.get("agent", {}).get("max_turns") or _cfg.get("max_turns") or 90
 
         # Provider routing
-        pr = _cfg.get("provider_routing") or {}
+        _cfg_for_lookup: Any = _cfg if isinstance(_cfg, dict) else {}
+        pr: Any = _cfg_for_lookup.get("provider_routing", {})
+        if not isinstance(pr, dict):
+            pr = {}
 
         from hermes_cli.runtime_provider import (
             resolve_runtime_provider,
@@ -3219,8 +3223,13 @@ def run_job(
             message = format_runtime_provider_error(exc)
             raise RuntimeError(message) from exc
 
-        reasoning_config = resolve_reasoning_config(
-            _cfg if isinstance(_cfg, dict) else {}, str(model)
+        job_reasoning_effort = str(job.get("reasoning_effort") or "").strip()
+        reasoning_config = (
+            parse_reasoning_effort(job_reasoning_effort)
+            if job_reasoning_effort
+            else resolve_reasoning_config(
+                _cfg if isinstance(_cfg, dict) else {}, str(model)
+            )
         )
 
         # Provider/model-drift fail-closed guard (#44585).
@@ -3331,10 +3340,10 @@ def run_job(
             prefill_messages=prefill_messages,
             fallback_model=fallback_model,
             credential_pool=credential_pool,
-            providers_allowed=pr.get("only"),
-            providers_ignored=pr.get("ignore"),
-            providers_order=pr.get("order"),
-            provider_sort=pr.get("sort"),
+            providers_allowed=cast(Any, pr.get("only")),
+            providers_ignored=cast(Any, pr.get("ignore")),
+            providers_order=cast(Any, pr.get("order")),
+            provider_sort=cast(Any, pr.get("sort")),
             openrouter_min_coding_score=(_cfg.get("openrouter") or {}).get("min_coding_score"),
             enabled_toolsets=_resolve_cron_enabled_toolsets(job, _cfg),
             disabled_toolsets=_resolve_cron_disabled_toolsets(_cfg),

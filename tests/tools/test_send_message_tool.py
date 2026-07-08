@@ -324,14 +324,14 @@ class TestSendMessageTool:
         config, _telegram_cfg = _make_config()
         config.get_home_channel = lambda _platform: home
 
-        with patch.dict(
-            os.environ,
-            {
+        def cron_session_env(name, default=""):
+            return {
                 "HERMES_CRON_AUTO_DELIVER_PLATFORM": "telegram",
                 "HERMES_CRON_AUTO_DELIVER_CHAT_ID": "-1001",
-            },
-            clear=False,
-        ), \
+                "HERMES_CRON_AUTO_DELIVER_THREAD_ID": "",
+            }.get(name, default)
+
+        with patch("gateway.session_context.get_session_env", side_effect=cron_session_env), \
              patch("gateway.config.load_gateway_config", return_value=config), \
              patch("tools.interrupt.is_interrupted", return_value=False), \
              patch("model_tools._run_async", side_effect=_run_async_immediately), \
@@ -382,6 +382,36 @@ class TestSendMessageTool:
             thread_id="17585",
             media_files=[],
             force_document=False,
+        )
+
+    def test_explicit_telegram_topic_target_requires_thread_exists(self):
+        config, telegram_cfg = _make_config()
+
+        with patch("gateway.config.load_gateway_config", return_value=config), \
+             patch("tools.interrupt.is_interrupted", return_value=False), \
+             patch("model_tools._run_async", side_effect=_run_async_immediately), \
+             patch("tools.send_message_tool._send_to_platform", new=AsyncMock(return_value={"success": True})) as send_mock, \
+             patch("gateway.mirror.mirror_to_session", return_value=True):
+            result = json.loads(
+                send_message_tool(
+                    {
+                        "action": "send",
+                        "target": "telegram:-1001:17585",
+                        "message": "hello",
+                    }
+                )
+            )
+
+        assert result["success"] is True
+        send_mock.assert_awaited_once_with(
+            Platform.TELEGRAM,
+            telegram_cfg,
+            "-1001",
+            "hello",
+            thread_id="17585",
+            media_files=[],
+            force_document=False,
+            require_thread_exists=True,
         )
 
     def test_display_label_target_resolves_via_channel_directory(self, tmp_path):
@@ -1392,6 +1422,29 @@ class TestSendTelegramThreadIdMapping:
         # Second call (retry): should NOT include message_thread_id
         call2_kwargs = bot.send_message.await_args_list[1].kwargs
         assert "message_thread_id" not in call2_kwargs
+
+    def test_explicit_thread_not_found_can_refuse_general_fallback(self, monkeypatch):
+        """Explicit Telegram topic sends must not silently degrade to General."""
+        bot = self._make_bot()
+        _install_telegram_mock(monkeypatch, bot)
+
+        bot.send_message = AsyncMock(
+            side_effect=Exception("Bad Request: message thread not found")
+        )
+
+        result = asyncio.run(
+            _send_telegram(
+                "tok",
+                "-1001234567890",
+                "hello",
+                thread_id="17585",
+                require_thread_exists=True,
+            )
+        )
+
+        assert "error" in result
+        assert "refusing to retry without message_thread_id" in result["error"]
+        assert bot.send_message.await_count == 1
 
     def test_thread_not_found_for_media_retries_without_message_thread_id(self, monkeypatch, tmp_path):
         """Media send with stale thread_id retries without it (#27012)."""

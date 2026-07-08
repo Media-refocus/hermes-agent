@@ -1643,6 +1643,9 @@ def anthropic_prompt_cache_policy(
     eff_base_url = base_url if base_url is not None else (agent.base_url or "")
     eff_api_mode = api_mode if api_mode is not None else (agent.api_mode or "")
     eff_model = (model if model is not None else agent.model) or ""
+    # Defensive: ensure eff_model is a string (cron jobs may pass dict model configs)
+    if isinstance(eff_model, dict):
+        eff_model = eff_model.get("model") or eff_model.get("default") or ""
 
     # MoA virtual provider: the agent's model/provider are the preset name and
     # "moa" — neither matches any caching branch, so the ACTING AGGREGATOR
