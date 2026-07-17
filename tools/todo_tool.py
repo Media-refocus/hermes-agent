@@ -236,7 +236,7 @@ def todo_tool(
     completed = sum(1 for i in items if i["status"] == "completed")
     cancelled = sum(1 for i in items if i["status"] == "cancelled")
 
-    return json.dumps({
+    result = {
         "todos": items,
         "summary": {
             "total": len(items),
@@ -245,7 +245,12 @@ def todo_tool(
             "completed": completed,
             "cancelled": cancelled,
         },
-    }, ensure_ascii=False)
+    }
+    # Expose a verified outcome only for mutations. A read must not be
+    # translated as "updated" by client-facing lifecycle renderers.
+    if todos is not None:
+        result["success"] = True
+    return json.dumps(result, ensure_ascii=False)
 
 
 def check_todo_requirements() -> bool:

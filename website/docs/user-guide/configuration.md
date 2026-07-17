@@ -1485,6 +1485,10 @@ display:
   show_cost: false        # Show estimated $ cost in the CLI status bar
   timestamps: false       # When true, prefixes user and assistant labels with [HH:MM] timestamps in the CLI / TUI transcript
   tool_preview_length: 0  # Max chars for tool call previews (0 = no limit, show full paths/commands)
+  client_activity:       # Gateway: opt-in fixed copy for explicitly classified tools
+    enabled: false
+    default: silent
+    rules: []
   runtime_footer:         # Gateway: append a runtime-context footer to final replies
     enabled: false
     fields: ["model", "context_pct", "cwd"]
@@ -1547,6 +1551,33 @@ display:
 In the CLI, cycle through these modes with `/verbose`. To use `/verbose` in messaging platforms (Telegram, Discord, Slack, etc.), set `tool_progress_command: true` in the `display` section above. The command will then cycle the mode and save to config.
 
 Tool progress requires a gateway adapter that can display progress updates safely. Platforms without message editing support, including Signal, suppress tool-progress bubbles even if `/verbose` saves a non-`off` mode.
+
+### Client activity translation (gateway only)
+
+`display.client_activity` is an opt-in, deny-by-default alternative to raw tool progress for client-facing gateways. It maps only explicitly classified tool lifecycle events to fixed copy. Tool names, arguments, results, paths, and previews are never interpolated into the message.
+
+```yaml
+display:
+  tool_progress: off
+  client_activity:
+    enabled: true
+    default: silent
+    rules:
+      - family: records
+        tools: ["records_get", "records_*"]
+        operations: ["read", "update"]     # optional: matches action or operation
+        required_args: ["account_id"]       # optional: checks presence, never renders value
+        args:                                # optional: allowlisted scalar selector values
+          scope: ["customer"]
+        copy:
+          start: "Checking your records…"
+          success: "Your records are up to date."
+          failure: "I could not update your records."
+```
+
+Rules are evaluated in order and accept exact tool names or shell-style globs. Unmatched tools stay silent. `start` copy is safe to show immediately; `success` and `failure` copy is emitted only when the tool result exposes a structured boolean outcome (`success`/`ok`) or an explicit error. Ambiguous prose such as `"completed"` never becomes a success claim.
+
+Rules with dynamic placeholders (`{...}`) are rejected. Repeated calls are deduplicated by `family` and phase for the current turn. A per-platform `display.platforms.<platform>.client_activity` section replaces the global section. This feature is independent from `display.tool_progress`, so raw progress can remain `off`.
 
 ### Runtime-metadata footer (gateway only)
 

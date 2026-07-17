@@ -6015,6 +6015,8 @@ class AIAgent:
         segment in emission order so safe subsets still run concurrently
         while side-effect ordering is preserved.
         """
+        from agent.tool_executor import _snapshot_tool_lifecycle_callbacks
+        lifecycle_callbacks = _snapshot_tool_lifecycle_callbacks(self)
         tool_calls = assistant_message.tool_calls
 
         # Allow _vprint during tool execution even with stream consumers
@@ -6022,7 +6024,8 @@ class AIAgent:
         try:
             if len(tool_calls) <= 1:
                 return self._execute_tool_calls_sequential(
-                    assistant_message, messages, effective_task_id, api_call_count
+                    assistant_message, messages, effective_task_id, api_call_count,
+                    lifecycle_callbacks=lifecycle_callbacks,
                 )
 
             from agent.tool_dispatch_helpers import _plan_tool_batch_segments
@@ -6034,16 +6037,19 @@ class AIAgent:
                 kind = segments[0][0]
                 if kind == "parallel":
                     return self._execute_tool_calls_concurrent(
-                        assistant_message, messages, effective_task_id, api_call_count
+                        assistant_message, messages, effective_task_id, api_call_count,
+                        lifecycle_callbacks=lifecycle_callbacks,
                     )
                 return self._execute_tool_calls_sequential(
-                    assistant_message, messages, effective_task_id, api_call_count
+                    assistant_message, messages, effective_task_id, api_call_count,
+                    lifecycle_callbacks=lifecycle_callbacks,
                 )
 
             from agent.tool_executor import execute_tool_calls_segmented
             return execute_tool_calls_segmented(
                 self, assistant_message, messages, effective_task_id, api_call_count,
                 segments=segments,
+                lifecycle_callbacks=lifecycle_callbacks,
             )
         finally:
             self._executing_tools = False
@@ -6124,15 +6130,27 @@ class AIAgent:
         body = ("\n" + indent).join(out_lines)
         return f"{indent}{label}{body}"
 
-    def _execute_tool_calls_concurrent(self, assistant_message, messages: list, effective_task_id: str, api_call_count: int = 0) -> None:
+    def _execute_tool_calls_concurrent(
+        self, assistant_message, messages: list, effective_task_id: str,
+        api_call_count: int = 0, *, lifecycle_callbacks=None,
+    ) -> None:
         """Forwarder — see ``agent.tool_executor.execute_tool_calls_concurrent``."""
         from agent.tool_executor import execute_tool_calls_concurrent
-        return execute_tool_calls_concurrent(self, assistant_message, messages, effective_task_id, api_call_count)
+        return execute_tool_calls_concurrent(
+            self, assistant_message, messages, effective_task_id, api_call_count,
+            lifecycle_callbacks=lifecycle_callbacks,
+        )
 
-    def _execute_tool_calls_sequential(self, assistant_message, messages: list, effective_task_id: str, api_call_count: int = 0) -> None:
+    def _execute_tool_calls_sequential(
+        self, assistant_message, messages: list, effective_task_id: str,
+        api_call_count: int = 0, *, lifecycle_callbacks=None,
+    ) -> None:
         """Forwarder — see ``agent.tool_executor.execute_tool_calls_sequential``."""
         from agent.tool_executor import execute_tool_calls_sequential
-        return execute_tool_calls_sequential(self, assistant_message, messages, effective_task_id, api_call_count)
+        return execute_tool_calls_sequential(
+            self, assistant_message, messages, effective_task_id, api_call_count,
+            lifecycle_callbacks=lifecycle_callbacks,
+        )
 
     def _handle_max_iterations(self, messages: list, api_call_count: int) -> str:
         """Forwarder — see ``agent.chat_completion_helpers.handle_max_iterations``."""

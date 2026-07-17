@@ -143,6 +143,35 @@ class FailingAgent:
         }
 
 
+class ClientActivityAgent:
+    """Emits a real lifecycle pair through callbacks installed by _run_agent."""
+
+    def __init__(self, **kwargs):
+        self.tools = []
+        self.tool_start_callback = None
+        self.tool_complete_callback = None
+        self.tool_lifecycle_callbacks = (None, None)
+        self._managed_tool_lifecycle_callbacks = False
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        secret = "sk-private-client-payload"
+        start = self.tool_start_callback
+        complete = self.tool_complete_callback
+        assert callable(start) and callable(complete)
+        assert self._managed_tool_lifecycle_callbacks is True
+        assert self.tool_lifecycle_callbacks == (start, complete)
+        start("call-1", "records_update", {"token": secret})
+        complete(
+            "call-1",
+            "records_update",
+            {"token": secret},
+            {"success": True, "path": "/private/customer/profile"},
+        )
+        # Give the async progress sender a polling interval to drain/edit.
+        time.sleep(0.7)
+        return {"final_response": "done", "messages": [], "api_calls": 1}
+
+
 def _make_runner(adapter):
     gateway_run = importlib.import_module("gateway.run")
     GatewayRunner = gateway_run.GatewayRunner
@@ -377,3 +406,59 @@ async def test_cleanup_chains_with_existing_callback(monkeypatch, tmp_path):
     # deletes at least one progress bubble.
     assert pre_existing_fired == [True]
     assert len(adapter.deleted) >= 1
+
+
+@pytest.mark.asyncio
+async def test_client_activity_reaches_editable_adapter_with_raw_progress_off(
+    monkeypatch, tmp_path
+):
+    """Exercise the actual _run_agent wiring, queue, sender and adapter path."""
+    adapter = CleanupCaptureAdapter()
+    runner = _make_runner(adapter)
+    gateway_run = _install_fakes(monkeypatch, ClientActivityAgent, cleanup_on=False)
+    monkeypatch.setenv("HERMES_TOOL_PROGRESS_MODE", "off")
+    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+    monkeypatch.setattr(
+        gateway_run,
+        "_load_gateway_config",
+        lambda: {
+            "display": {
+                "tool_progress": "off",
+                "client_activity": {
+                    "enabled": True,
+                    "default": "silent",
+                    "rules": [{
+                        "family": "records",
+                        "tools": ["records_update"],
+                        "copy": {
+                            "start": "Estoy revisando tus registros.",
+                            "success": "He actualizado tus registros.",
+                        },
+                    }],
+                },
+            }
+        },
+    )
+
+    source = SessionSource(platform=Platform.TELEGRAM, chat_id="-1001")
+    result = await runner._run_agent(
+        message="update records",
+        context_prompt="",
+        history=[],
+        source=source,
+        session_id="sess-client-activity",
+        session_key="agent:main:telegram:group:-1001:client-activity",
+    )
+
+    assert result["final_response"] == "done"
+    rendered = [entry["content"] for entry in adapter.sent]
+    rendered.extend(entry["content"] for entry in adapter.edits)
+    joined = "\n".join(rendered)
+    assert "Estoy revisando tus registros." in joined
+    assert "He actualizado tus registros." in joined
+    for leaked in (
+        "records_update",
+        "sk-private-client-payload",
+        "/private/customer/profile",
+    ):
+        assert leaked not in joined

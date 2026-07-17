@@ -3101,6 +3101,53 @@ class TestConcurrentToolExecution:
         assert starts == [("c1", "web_search", {"query": "hello"})]
         assert completes == [("c1", "web_search", {"query": "hello"}, '{"success": true}')]
 
+    def test_managed_lifecycle_snapshot_never_reads_legacy_pair(self):
+        from agent.tool_executor import _snapshot_tool_lifecycle_callbacks
+
+        start = lambda *_args: None
+        complete = lambda *_args: None
+
+        class ManagedAgent:
+            _managed_tool_lifecycle_callbacks = True
+            tool_lifecycle_callbacks = (start, complete)
+
+            @property
+            def tool_start_callback(self):
+                raise AssertionError("managed snapshot performed a torn legacy read")
+
+            @property
+            def tool_complete_callback(self):
+                raise AssertionError("managed snapshot performed a torn legacy read")
+
+        assert _snapshot_tool_lifecycle_callbacks(ManagedAgent()) == (start, complete)
+
+    def test_sequential_tool_completion_uses_callback_captured_at_start(self, agent):
+        call = _mock_tool_call(
+            name="web_search", arguments='{"query":"old"}', call_id="reused"
+        )
+        message = _mock_assistant_msg(content="", tool_calls=[call])
+        old, new = [], []
+        old_start = lambda *args: old.append(("start", args[0]))
+        old_complete = lambda *args: old.append(("complete", args[0]))
+        agent.tool_lifecycle_callbacks = (old_start, old_complete)
+        agent._managed_tool_lifecycle_callbacks = True
+
+        def switch_turn(*_args, **_kwargs):
+            new_start = lambda *args: new.append(("start", args[0]))
+            new_complete = lambda *args: new.append(("complete", args[0]))
+            agent.tool_lifecycle_callbacks = (new_start, new_complete)
+            return '{"success": true}'
+
+        with patch("run_agent.handle_function_call", side_effect=switch_turn):
+            agent._execute_tool_calls_sequential(message, [], "task-old")
+
+        assert old == [("start", "reused"), ("complete", "reused")]
+        assert new == []
+
+        with patch("run_agent.handle_function_call", return_value='{"success": true}'):
+            agent._execute_tool_calls_sequential(message, [], "task-new")
+        assert new == [("start", "reused"), ("complete", "reused")]
+
     def test_sequential_browser_type_callbacks_redact_api_key(self, agent):
         secret = "sk-proj-ABCD1234567890EFGH"
         tool_call = _mock_tool_call(
@@ -3145,6 +3192,33 @@ class TestConcurrentToolExecution:
         assert len(completes) == 2
         assert {entry[0] for entry in completes} == {"c1", "c2"}
         assert {entry[3] for entry in completes} == {'{"id":1}', '{"id":2}'}
+
+    def test_concurrent_tool_completion_uses_callback_captured_at_start(self, agent):
+        call = _mock_tool_call(
+            name="web_search", arguments='{"query":"old"}', call_id="reused"
+        )
+        message = _mock_assistant_msg(content="", tool_calls=[call])
+        old, new = [], []
+        old_start = lambda *args: old.append(("start", args[0]))
+        old_complete = lambda *args: old.append(("complete", args[0]))
+        agent.tool_lifecycle_callbacks = (old_start, old_complete)
+        agent._managed_tool_lifecycle_callbacks = True
+
+        def switch_turn(*_args, **_kwargs):
+            new_start = lambda *args: new.append(("start", args[0]))
+            new_complete = lambda *args: new.append(("complete", args[0]))
+            agent.tool_lifecycle_callbacks = (new_start, new_complete)
+            return '{"success": true}'
+
+        with patch("run_agent.handle_function_call", side_effect=switch_turn):
+            agent._execute_tool_calls_concurrent(message, [], "task-old")
+
+        assert old == [("start", "reused"), ("complete", "reused")]
+        assert new == []
+
+        with patch("run_agent.handle_function_call", return_value='{"success": true}'):
+            agent._execute_tool_calls_concurrent(message, [], "task-new")
+        assert new == [("start", "reused"), ("complete", "reused")]
 
     def test_concurrent_browser_type_callbacks_redact_api_key(self, agent):
         secret = "sk-proj-ABCD1234567890EFGH"
