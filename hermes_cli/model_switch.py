@@ -150,53 +150,40 @@ def _provider_config_disabled(user_providers: dict | None, slug: str) -> bool:
     return False
 
 
-def _configured_provider_model_ids_for_listing(
+def _compose_configured_provider_models(
     user_providers: dict | None,
     slug: str,
-) -> list[str]:
-    """Return explicit ``providers.<slug>.models`` for listing overrides.
+    discovered_models: list[str],
+) -> tuple[list[str], bool]:
+    """Compose declared and discovered models for a built-in provider row.
 
-    If a built-in provider also has credentials, the built-in live catalog would
-    normally win and the user-config row would be skipped as a duplicate. When
-    the config sets ``discover_models: false`` we honor the explicit model set
-    instead. This is useful for provider-side aliases that are callable but not
-    returned by ``/v1/models`` (for example ``openrouter/fusion``), and for
-    curated fleet pickers that should not expose a provider's entire catalog.
+    Returns ``(models, authoritative)``. ``discover_models: false`` makes the
+    declaration authoritative even when it is empty; otherwise declarations
+    extend discovery with stable de-duplication.
     """
-    if not isinstance(user_providers, dict):
-        return []
-    cfg = user_providers.get((slug or "").strip().lower())
+    cfg = (
+        user_providers.get((slug or "").strip().lower())
+        if isinstance(user_providers, dict)
+        else None
+    )
     if not isinstance(cfg, dict):
-        return []
-    if _provider_config_disabled(user_providers, slug):
-        return []
+        return list(discovered_models), False
+
+    declared: list[str] = []
+    for key in ("default_model", "model"):
+        value = cfg.get(key)
+        if isinstance(value, str) and value.strip() and value.strip() not in declared:
+            declared.append(value.strip())
+    for model_id in _declared_model_ids(cfg.get("models", [])):
+        if model_id not in declared:
+            declared.append(model_id)
 
     discover = cfg.get("discover_models", True)
     if isinstance(discover, str):
         discover = discover.strip().lower() not in {"0", "false", "no", "off"}
-    if discover is not False:
-        return []
-
-    models: list[str] = []
-    for key in ("default_model", "model"):
-        value = cfg.get(key)
-        if isinstance(value, str) and value.strip() and value.strip() not in models:
-            models.append(value.strip())
-
-    cfg_models = cfg.get("models", [])
-    if isinstance(cfg_models, dict):
-        for mid in cfg_models:
-            if isinstance(mid, str) and mid.strip() and mid.strip() not in models:
-                models.append(mid.strip())
-    elif isinstance(cfg_models, (list, tuple)):
-        for item in cfg_models:
-            if isinstance(item, str) and item.strip() and item.strip() not in models:
-                models.append(item.strip())
-            elif isinstance(item, dict):
-                name = item.get("name")
-                if isinstance(name, str) and name.strip() and name.strip() not in models:
-                    models.append(name.strip())
-    return models
+    if discover is False:
+        return declared, True
+    return list(dict.fromkeys([*declared, *discovered_models])), False
 
 
 # ---------------------------------------------------------------------------
@@ -1510,6 +1497,25 @@ def _credential_pool_is_usable(provider: str, *, raw_pool_present: bool = False)
     return raw_pool_present
 
 
+def _credential_pool_is_visible_for_listing(
+    provider: str,
+    *,
+    for_picker: bool,
+    raw_pool_present: bool = False,
+) -> bool:
+    """Keep exhausted pools visible only in the interactive model picker."""
+    if _credential_pool_is_usable(provider, raw_pool_present=raw_pool_present):
+        return True
+    if not for_picker:
+        return False
+    try:
+        from agent.credential_pool import load_pool
+
+        return bool(load_pool(provider).has_credentials())
+    except Exception:
+        return False
+
+
 def _extra_headers_from_config(entry: Any) -> dict[str, str]:
     if not isinstance(entry, dict):
         return {}
@@ -1825,8 +1831,10 @@ def list_authenticated_providers(
                     store and store.get("credential_pool", {}).get(hermes_id)
                 )
                 if raw_pool_present:
-                    has_creds = _credential_pool_is_usable(
-                        hermes_id, raw_pool_present=True
+                    has_creds = _credential_pool_is_visible_for_listing(
+                        hermes_id,
+                        for_picker=for_picker,
+                        raw_pool_present=True,
                     )
             except Exception:
                 pass
@@ -1842,24 +1850,14 @@ def list_authenticated_providers(
             model_ids = curated.get(hermes_id, [])
             if hermes_id in _MODELS_DEV_PREFERRED:
                 model_ids = _merge_with_models_dev(hermes_id, model_ids)
-        configured_model_ids = _configured_provider_model_ids_for_listing(user_providers, hermes_id)
+        model_ids, configured_authoritative = _compose_configured_provider_models(
+            user_providers, hermes_id, model_ids
+        )
         source = "built-in"
         is_user_defined = False
-        if configured_model_ids:
-            # ``discover_models: false`` makes the explicit list authoritative.
-            model_ids = configured_model_ids
+        if configured_authoritative:
             source = "user-config"
             is_user_defined = True
-        else:
-            # Otherwise explicit declarations extend the discovered catalog.
-            # Section 3 cannot emit them later because this built-in row owns
-            # the slug, so merge before applying max_models.
-            configured_models: list[str] = []
-            if isinstance(user_providers, dict):
-                configured = user_providers.get(hermes_id)
-                if isinstance(configured, dict):
-                    configured_models = _declared_model_ids(configured.get("models"))
-            model_ids = list(dict.fromkeys([*configured_models, *model_ids]))
         total = len(model_ids)
         if hermes_id in _UNCAPPED_PICKER_PROVIDERS:
             top = model_ids  # Aggregator: show full catalog regardless of max_models
@@ -1936,22 +1934,10 @@ def list_authenticated_providers(
         # imports on demand but aren't in the raw auth.json yet.
         if not has_creds:
             try:
-                if _credential_pool_is_usable(hermes_slug):
+                if _credential_pool_is_visible_for_listing(
+                    hermes_slug, for_picker=for_picker
+                ):
                     has_creds = True
-                elif for_picker:
-                    # For the interactive /model picker, also show providers
-                    # whose credential pool has entries but all are temporarily
-                    # rate-limited.  Rate limits are per-model for many
-                    # providers (e.g. Google Gemini) — switching to a different
-                    # model under the same provider may work even when all keys
-                    # are in cooldown.
-                    try:
-                        from agent.credential_pool import load_pool
-                        _pool = load_pool(hermes_slug)
-                        if _pool.has_credentials():
-                            has_creds = True
-                    except Exception:
-                        pass
             except Exception as exc:
                 logger.debug("Credential pool check failed for %s: %s", hermes_slug, exc)
         # Fallback: check external credential files directly.
@@ -2040,11 +2026,12 @@ def list_authenticated_providers(
                 model_ids = curated.get(hermes_slug, []) or curated.get(pid, [])
                 if hermes_slug in _MODELS_DEV_PREFERRED:
                     model_ids = _merge_with_models_dev(hermes_slug, model_ids)
-        configured_model_ids = _configured_provider_model_ids_for_listing(user_providers, hermes_slug)
+        model_ids, configured_authoritative = _compose_configured_provider_models(
+            user_providers, hermes_slug, model_ids
+        )
         source = "hermes"
         is_user_defined = False
-        if configured_model_ids:
-            model_ids = configured_model_ids
+        if configured_authoritative:
             source = "user-config"
             is_user_defined = True
         total = len(model_ids)
@@ -2098,7 +2085,9 @@ def list_authenticated_providers(
                 pass
         if not _cp_has_creds:
             try:
-                if _credential_pool_is_usable(_cp.slug):
+                if _credential_pool_is_visible_for_listing(
+                    _cp.slug, for_picker=for_picker
+                ):
                     _cp_has_creds = True
             except Exception:
                 pass
@@ -2125,11 +2114,12 @@ def list_authenticated_providers(
             _cp_model_ids = cached_provider_model_ids(_cp.slug)
             if not _cp_model_ids:
                 _cp_model_ids = curated.get(_cp.slug, [])
-        configured_model_ids = _configured_provider_model_ids_for_listing(user_providers, _cp.slug)
+        _cp_model_ids, configured_authoritative = _compose_configured_provider_models(
+            user_providers, _cp.slug, _cp_model_ids
+        )
         source = "canonical"
         is_user_defined = False
-        if configured_model_ids:
-            _cp_model_ids = configured_model_ids
+        if configured_authoritative:
             source = "user-config"
             is_user_defined = True
         _cp_total = len(_cp_model_ids)
