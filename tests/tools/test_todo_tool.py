@@ -105,6 +105,7 @@ class TestTodoToolFunction:
         result = json.loads(todo_tool(store=store))
         assert result["summary"]["total"] == 1
         assert result["summary"]["pending"] == 1
+        assert "success" not in result
 
     def test_write_mode(self):
         store = TodoStore()
@@ -113,6 +114,7 @@ class TestTodoToolFunction:
             store=store,
         ))
         assert result["summary"]["in_progress"] == 1
+        assert result["success"] is True
 
     def test_no_store_returns_error(self):
         result = json.loads(todo_tool())

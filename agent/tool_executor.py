@@ -324,7 +324,24 @@ def _run_agent_tool_execution_middleware(
     return result, observed_args
 
 
-def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effective_task_id: str, api_call_count: int = 0, *, finalize: bool = True) -> None:
+def _snapshot_tool_lifecycle_callbacks(agent):
+    """Return one consistent start/complete pair for this tool execution."""
+    if getattr(agent, "_managed_tool_lifecycle_callbacks", False):
+        return agent.tool_lifecycle_callbacks
+    # Backward compatibility for direct Agent users outside the managed gateway.
+    return agent.tool_start_callback, agent.tool_complete_callback
+
+
+def execute_tool_calls_concurrent(
+    agent,
+    assistant_message,
+    messages: list,
+    effective_task_id: str,
+    api_call_count: int = 0,
+    *,
+    finalize: bool = True,
+    lifecycle_callbacks=None,
+) -> None:
     """Execute multiple tool calls concurrently using a thread pool.
 
     Results are collected in the original tool-call order and appended to
@@ -336,6 +353,10 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
     """
     tool_calls = assistant_message.tool_calls
     num_tools = len(tool_calls)
+
+    if lifecycle_callbacks is None:
+        lifecycle_callbacks = _snapshot_tool_lifecycle_callbacks(agent)
+    tool_start_callback, tool_complete_callback = lifecycle_callbacks
 
     # Resolve the context-scaled tool-output budget once per turn (cheap, but
     # avoids rebuilding it per result inside the loop below).
@@ -551,10 +572,10 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
     for tc, name, args, middleware_trace, block_result, blocked_by_guardrail in parsed_calls:
         if block_result is not None:
             continue
-        if agent.tool_start_callback:
+        if tool_start_callback:
             try:
                 display_args = _redact_tool_args_for_display(name, args) or args
-                agent.tool_start_callback(tc.id, name, display_args)
+                tool_start_callback(tc.id, name, display_args)
             except Exception as cb_err:
                 logging.debug(f"Tool start callback error: {cb_err}")
 
@@ -942,10 +963,10 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
         agent._current_tool = None
         agent._touch_activity(f"tool completed: {name} ({tool_duration:.1f}s)")
 
-        if not blocked and agent.tool_complete_callback:
+        if not blocked and tool_complete_callback:
             try:
                 display_args = _redact_tool_args_for_display(name, args) or args
-                agent.tool_complete_callback(tc.id, name, display_args, function_result)
+                tool_complete_callback(tc.id, name, display_args, function_result)
             except Exception as cb_err:
                 logging.debug(f"Tool complete callback error: {cb_err}")
 
@@ -1025,13 +1046,26 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
 
 
 
-def execute_tool_calls_sequential(agent, assistant_message, messages: list, effective_task_id: str, api_call_count: int = 0, *, finalize: bool = True) -> None:
+def execute_tool_calls_sequential(
+    agent,
+    assistant_message,
+    messages: list,
+    effective_task_id: str,
+    api_call_count: int = 0,
+    *,
+    finalize: bool = True,
+    lifecycle_callbacks=None,
+) -> None:
     """Execute tool calls sequentially (original behavior). Used for single calls or interactive tools.
 
     ``finalize=False`` skips the end-of-batch aggregate budget enforcement
     and /steer injection — used when this call is one segment of a larger
     mixed batch and the segmented dispatcher owns the turn-end work.
     """
+    if lifecycle_callbacks is None:
+        lifecycle_callbacks = _snapshot_tool_lifecycle_callbacks(agent)
+    tool_start_callback, tool_complete_callback = lifecycle_callbacks
+
     # Resolve the context-scaled tool-output budget once per turn.
     _tool_budget = _budget_for_agent(agent)
     for i, tool_call in enumerate(assistant_message.tool_calls, 1):
@@ -1178,10 +1212,10 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
             except Exception as cb_err:
                 logging.debug(f"Tool progress callback error: {cb_err}")
 
-        if not _execution_blocked and agent.tool_start_callback:
+        if not _execution_blocked and tool_start_callback:
             try:
                 display_args = _redact_tool_args_for_display(function_name, function_args) or function_args
-                agent.tool_start_callback(tool_call.id, function_name, display_args)
+                tool_start_callback(tool_call.id, function_name, display_args)
             except Exception as cb_err:
                 logging.debug(f"Tool start callback error: {cb_err}")
 
@@ -1638,10 +1672,10 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
             _log_result = _multimodal_text_summary(function_result)
             logging.debug(f"Tool result ({len(_log_result)} chars): {_log_result}")
 
-        if not _execution_blocked and agent.tool_complete_callback:
+        if not _execution_blocked and tool_complete_callback:
             try:
                 display_args = _redact_tool_args_for_display(function_name, function_args) or function_args
-                agent.tool_complete_callback(tool_call.id, function_name, display_args, function_result)
+                tool_complete_callback(tool_call.id, function_name, display_args, function_result)
             except Exception as cb_err:
                 logging.debug(f"Tool complete callback error: {cb_err}")
 
@@ -1739,7 +1773,10 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
 
 
 
-def execute_tool_calls_segmented(agent, assistant_message, messages: list, effective_task_id: str, api_call_count: int = 0, segments=None) -> None:
+def execute_tool_calls_segmented(
+    agent, assistant_message, messages: list, effective_task_id: str,
+    api_call_count: int = 0, segments=None, *, lifecycle_callbacks=None,
+) -> None:
     """Execute a mixed tool-call batch as ordered parallel/sequential segments.
 
     ``segments`` is the ``(kind, calls)`` plan from
@@ -1764,6 +1801,9 @@ def execute_tool_calls_segmented(agent, assistant_message, messages: list, effec
     """
     from types import SimpleNamespace
 
+    if lifecycle_callbacks is None:
+        lifecycle_callbacks = _snapshot_tool_lifecycle_callbacks(agent)
+
     if segments is None:
         _active_env = get_active_env(effective_task_id)
         _exec_cwd = Path(_active_env.cwd) if _active_env is not None and _active_env.cwd else None
@@ -1775,11 +1815,13 @@ def execute_tool_calls_segmented(agent, assistant_message, messages: list, effec
             execute_tool_calls_concurrent(
                 agent, segment_message, messages, effective_task_id, api_call_count,
                 finalize=False,
+                lifecycle_callbacks=lifecycle_callbacks,
             )
         else:
             execute_tool_calls_sequential(
                 agent, segment_message, messages, effective_task_id, api_call_count,
                 finalize=False,
+                lifecycle_callbacks=lifecycle_callbacks,
             )
 
     # ── Whole-turn finalize (budget + /steer) ─────────────────────────

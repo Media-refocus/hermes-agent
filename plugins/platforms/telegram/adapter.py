@@ -7328,6 +7328,29 @@ class TelegramAdapter(BasePlatformAdapter):
             return {str(part).strip() for part in raw if str(part).strip()}
         return {part.strip() for part in str(raw).split(",") if part.strip()}
 
+    def _telegram_no_reactive_reply_markers(self) -> set[str]:
+        """Markers that make a Telegram message inbox-only.
+
+        Cron deliveries and cross-agent reports can be visible in a shared
+        topic without dispatching the receiving bot.  The default marker is
+        intentionally explicit so normal user messages are unaffected.
+        """
+        raw = self.config.extra.get("no_reactive_reply_markers")
+        if raw is None:
+            raw = os.getenv("TELEGRAM_NO_REACTIVE_REPLY_MARKERS", "[NO_REACTIVE_REPLY]")
+        if raw is False:
+            return set()
+        if isinstance(raw, list):
+            return {str(part).strip().lower() for part in raw if str(part).strip()}
+        return {part.strip().lower() for part in str(raw).split(",") if part.strip()}
+
+    def _message_has_no_reactive_reply_marker(self, message) -> bool:
+        markers = self._telegram_no_reactive_reply_markers()
+        if not markers:
+            return False
+        text = (getattr(message, "text", None) or getattr(message, "caption", None) or "").lower()
+        return any(marker in text for marker in markers)
+
     def _telegram_ignored_threads(self) -> set[int]:
         raw = self.config.extra.get("ignored_threads")
         if raw is None:
@@ -7594,6 +7617,8 @@ class TelegramAdapter(BasePlatformAdapter):
         if not self._telegram_observe_unmentioned_group_messages():
             return False
         if not self._is_group_chat(message):
+            return False
+        if self._message_has_no_reactive_reply_marker(message):
             return False
 
         thread_id = getattr(message, "message_thread_id", None)
@@ -7932,6 +7957,10 @@ class TelegramAdapter(BasePlatformAdapter):
         - the bot is @mentioned
         - the text/caption matches a configured regex wake-word pattern
 
+        Messages containing a no-reactive-reply marker (default:
+        ``[NO_REACTIVE_REPLY]``) are never dispatched.  This lets cron reports
+        land visibly in shared topics as inbox artifacts without waking the bot.
+
         When ``allowed_chats`` is non-empty, it remains a hard gate except for
         the narrow ``guest_mode`` bypass: group/supergroup messages that
         explicitly @mention this bot. Replies and regex wake words do not bypass
@@ -7949,6 +7978,8 @@ class TelegramAdapter(BasePlatformAdapter):
         if self._is_own_message(message):
             return False
 
+        if self._message_has_no_reactive_reply_marker(message):
+            return False
         if not self._is_group_chat(message):
             return True
 

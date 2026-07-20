@@ -1921,6 +1921,14 @@ DEFAULT_CONFIG = {
         # tool name. Applies to CLI spinner + gateway/desktop tool-progress.
         # Custom/plugin/MCP tools always fall back to the raw preview.
         "friendly_tool_labels": True,
+        # Opt-in, deny-by-default translation of classified tool lifecycle
+        # events into fixed client-facing copy. Rules are ordered and may be
+        # replaced per platform under display.platforms.<platform>.client_activity.
+        "client_activity": {
+            "enabled": False,
+            "default": "silent",
+            "rules": [],
+        },
         # How gateway tool-progress is grouped on platforms that support message
         # editing: "accumulate" (default) edits one bubble in place; "separate"
         # sends one message per tool (the pre-v0.9 behavior, noisier). Only

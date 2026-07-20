@@ -7,6 +7,7 @@ Compatibility wrappers remain for direct Python callers and legacy tests.
 
 import json
 import logging
+import os
 import re
 import sys
 from pathlib import Path
@@ -578,6 +579,7 @@ def _format_job(job: Dict[str, Any]) -> Dict[str, Any]:
         "model": job.get("model"),
         "provider": job.get("provider"),
         "base_url": job.get("base_url"),
+        "reasoning_effort": job.get("reasoning_effort"),
         "schedule": job.get("schedule_display") or "?",
         "repeat": _repeat_display(job),
         "deliver": job.get("deliver", "local"),
@@ -670,6 +672,7 @@ def cronjob(
     model: Optional[str] = None,
     provider: Optional[str] = None,
     base_url: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
     reason: Optional[str] = None,
     script: Optional[str] = None,
     context_from: Optional[Union[str, List[str]]] = None,
@@ -744,6 +747,7 @@ def cronjob(
                 model=_normalize_optional_job_value(model),
                 provider=_normalize_optional_job_value(provider),
                 base_url=_normalize_optional_job_value(base_url, strip_trailing_slash=True),
+                reasoning_effort=_normalize_optional_job_value(reasoning_effort),
                 script=_normalize_optional_job_value(script),
                 context_from=context_from,
                 enabled_toolsets=enabled_toolsets or None,
@@ -875,6 +879,8 @@ def cronjob(
                 updates["provider"] = _normalize_optional_job_value(provider)
             if base_url is not None:
                 updates["base_url"] = _normalize_optional_job_value(base_url, strip_trailing_slash=True)
+            if reasoning_effort is not None:
+                updates["reasoning_effort"] = _normalize_optional_job_value(reasoning_effort)
             # Re-validate the EFFECTIVE provider/base_url on EVERY update, not
             # only when this update supplies provider/base_url. A job persisted
             # before this guard (or written directly to the jobs store) may
@@ -1041,6 +1047,11 @@ Important safety rule: cron-run sessions should not recursively schedule more cr
                 "type": "string",
                 "description": f"Optional path to a script that runs each tick. In the default mode its stdout is injected into the agent's prompt as context (data-collection / change-detection pattern). With no_agent=True, the script IS the job and its stdout is delivered verbatim (classic watchdog pattern). Relative paths resolve under {display_hermes_home()}/scripts/. ``.sh``/``.bash`` extensions run via bash, everything else via Python. On update, pass empty string to clear."
             },
+            "reasoning_effort": {
+                "type": "string",
+                "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
+                "description": "Optional per-job reasoning effort override for LLM-driven cron jobs. Use medium for premium governance consolidation; high only for risky apply/conflict decisions. When unset, inherits profile agent.reasoning_effort. On update, pass an empty string to clear."
+            },
             "no_agent": {
                 "type": "boolean",
                 "default": False,
@@ -1134,6 +1145,7 @@ registry.register(
         model=_mo[1],
         provider=_mo[0] or args.get("provider"),
         base_url=args.get("base_url"),
+        reasoning_effort=args.get("reasoning_effort"),
         reason=args.get("reason"),
         script=args.get("script"),
         context_from=args.get("context_from"),

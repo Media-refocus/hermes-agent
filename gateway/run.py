@@ -17931,7 +17931,19 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             require_platform_override_for={Platform.MATTERMOST},
         )
         _thinking_enabled = _thinking_mode != "off"
-        needs_progress_queue = tool_progress_enabled or _thinking_enabled
+        # Fixed client-facing activity copy is a separate opt-in surface. It
+        # deliberately does not depend on display.tool_progress and defaults
+        # deny/silent for every unclassified tool.
+        from gateway.client_activity import (
+            compose_callbacks,
+            resolve_client_activity,
+        )
+        _client_activity = resolve_client_activity(user_config, platform_key)
+        needs_progress_queue = (
+            tool_progress_enabled
+            or _thinking_enabled
+            or _client_activity.enabled
+        )
 
 
         # Queue for progress messages (thread-safe)
@@ -17984,6 +17996,20 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 )
             except Exception as _ack_err:
                 logger.debug("voice ack schedule failed: %s", _ack_err)
+
+        def _client_activity_start_callback(call_id, tool_name, args):
+            if not progress_queue or not _run_still_current():
+                return
+            message = _client_activity.start(call_id, tool_name, args)
+            if message:
+                progress_queue.put(message)
+
+        def _client_activity_complete_callback(call_id, tool_name, args, result):
+            if not progress_queue or not _run_still_current():
+                return
+            message = _client_activity.complete(call_id, tool_name, args, result)
+            if message:
+                progress_queue.put(message)
 
         # Auto-cleanup of temporary progress bubbles (Telegram + any adapter
         # that implements ``delete_message``). When enabled via
@@ -19189,11 +19215,25 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             agent.tool_progress_callback = (
                 progress_callback if (needs_progress_queue or log_mode_enabled) else None
             )
-            # Discord voice verbal-ack hook (fires once per turn on first tool
-            # call; armed only when in a voice channel with the mixer running).
-            agent.tool_start_callback = (
-                voice_ack_callback if _voice_ack_guild[0] is not None else None
+            # Discord voice verbal-ack and opt-in client activity hooks share
+            # the structured lifecycle callbacks; neither replaces the other.
+            tool_start_callback = compose_callbacks(
+                voice_ack_callback if _voice_ack_guild[0] is not None else None,
+                _client_activity_start_callback if _client_activity.enabled else None,
             )
+            tool_complete_callback = compose_callbacks(
+                _client_activity_complete_callback if _client_activity.enabled else None,
+            )
+            # Keep legacy attributes for direct consumers, then atomically publish
+            # the immutable pair used by managed tool executors. Existing turns see
+            # either the previous pair or the new pair, never a hybrid.
+            agent.tool_start_callback = tool_start_callback
+            agent.tool_complete_callback = tool_complete_callback
+            agent.tool_lifecycle_callbacks = (
+                tool_start_callback,
+                tool_complete_callback,
+            )
+            agent._managed_tool_lifecycle_callbacks = True
             agent.step_callback = _step_callback_sync if _hooks_ref.loaded_hooks else None
             agent.stream_delta_callback = _stream_delta_cb
             agent.interim_assistant_callback = _interim_assistant_cb if _want_interim_messages else None

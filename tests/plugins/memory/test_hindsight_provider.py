@@ -642,6 +642,7 @@ class TestToolHandlers:
         result = json.loads(provider.handle_tool_call(
             "hindsight_retain", {"content": "user likes dark mode"}
         ))
+        assert result["success"] is True
         assert result["result"] == "Memory stored successfully."
         provider._client.aretain_batch.assert_called_once()
         call_kwargs = provider._client.aretain_batch.call_args.kwargs

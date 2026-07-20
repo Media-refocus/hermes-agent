@@ -303,6 +303,95 @@ class TestSegmentedDispatchIntegration:
         assert {"s1", "s2"} == set(executed[:t1_pos])
         assert {"s3", "s4"} == set(executed[t1_pos + 1:])
 
+    def test_mixed_batch_keeps_one_lifecycle_snapshot_across_segments(self, agent):
+        calls = [
+            _tc("web_search", '{"query":"a"}', call_id="s1"),
+            _tc("web_search", '{"query":"b"}', call_id="s2"),
+            _tc("terminal", '{"command":"echo done"}', call_id="reused"),
+        ]
+        msg = SimpleNamespace(content="", tool_calls=calls)
+        messages = []
+        old, new = [], []
+        old_start = lambda *args: old.append(("start", args[0]))
+        old_complete = lambda *args: old.append(("complete", args[0]))
+        new_start = lambda *args: new.append(("start", args[0]))
+        new_complete = lambda *args: new.append(("complete", args[0]))
+        agent.tool_lifecycle_callbacks = (old_start, old_complete)
+        agent._managed_tool_lifecycle_callbacks = True
+
+        def fake_handle(name, args, task_id, **kwargs):
+            if kwargs["tool_call_id"] == "s2":
+                agent.tool_lifecycle_callbacks = (new_start, new_complete)
+            return json.dumps({"ok": True})
+
+        with patch("run_agent.handle_function_call", side_effect=fake_handle):
+            agent._execute_tool_calls(msg, messages, "task-1")
+
+        assert sorted(old) == sorted(
+            [
+                ("start", "s1"),
+                ("start", "s2"),
+                ("complete", "s1"),
+                ("complete", "s2"),
+                ("start", "reused"),
+                ("complete", "reused"),
+            ]
+        )
+        assert new == []
+
+    @pytest.mark.parametrize(
+        "calls",
+        [
+            [
+                _tc("web_search", '{"query":"a"}', call_id="p1"),
+                _tc("web_search", '{"query":"b"}', call_id="p2"),
+            ],
+            [
+                _tc("terminal", '{"command":"a"}', call_id="q1"),
+                _tc("terminal", '{"command":"b"}', call_id="q2"),
+            ],
+            [
+                _tc("web_search", '{"query":"a"}', call_id="m1"),
+                _tc("web_search", '{"query":"b"}', call_id="m2"),
+                _tc("terminal", '{"command":"done"}', call_id="m3"),
+            ],
+        ],
+        ids=["homogeneous-parallel", "homogeneous-sequential", "mixed"],
+    )
+    def test_batch_snapshots_lifecycle_before_planning(self, agent, calls):
+        msg = SimpleNamespace(content="", tool_calls=calls)
+        old, new = [], []
+        old_start = lambda *args: old.append(("start", args[0]))
+        old_complete = lambda *args: old.append(("complete", args[0]))
+        new_start = lambda *args: new.append(("start", args[0]))
+        new_complete = lambda *args: new.append(("complete", args[0]))
+        agent.tool_lifecycle_callbacks = (old_start, old_complete)
+        agent._managed_tool_lifecycle_callbacks = True
+
+        def rebinding_planner(tool_calls, **kwargs):
+            agent.tool_lifecycle_callbacks = (new_start, new_complete)
+            return _plan_tool_batch_segments(tool_calls, **kwargs)
+
+        with (
+            patch(
+                "agent.tool_dispatch_helpers._plan_tool_batch_segments",
+                side_effect=rebinding_planner,
+            ),
+            patch(
+                "run_agent.handle_function_call",
+                return_value=json.dumps({"success": True}),
+            ),
+        ):
+            agent._execute_tool_calls(msg, [], "task-1")
+
+        expected = sorted(
+            (phase, call.id)
+            for call in calls
+            for phase in ("start", "complete")
+        )
+        assert sorted(old) == expected
+        assert new == []
+
     def test_homogeneous_safe_batch_still_uses_plain_concurrent_path(self, agent):
         calls = [_tc("web_search", '{"query":"a"}'), _tc("web_search", '{"query":"b"}')]
         msg = SimpleNamespace(content="", tool_calls=calls)

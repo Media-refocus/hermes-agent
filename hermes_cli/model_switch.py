@@ -30,6 +30,7 @@ from hermes_cli.providers import (
     custom_provider_slug,
     determine_api_mode,
     get_label,
+    host_mandated_api_mode,
     is_aggregator,
     resolve_provider_full,
 )
@@ -115,6 +116,74 @@ def _bare_custom_provider_def(current_base_url: str) -> Optional[ProviderDef]:
         auth_type="api_key",
         source="model-config",
     )
+
+
+def _provider_config_disabled(user_providers: dict | None, slug: str) -> bool:
+    """Return True when ``providers.<slug>`` explicitly disables a provider.
+
+    ``providers:`` normally declares user endpoints, but fleet operators also
+    need a non-destructive way to hide built-in providers from ``/model``
+    without deleting credentials. A row such as ``providers.anthropic.enabled:
+    false`` suppresses that provider from picker/list output while leaving auth
+    files intact.
+    """
+    if not isinstance(user_providers, dict):
+        return False
+    cfg = user_providers.get((slug or "").strip().lower())
+    if not isinstance(cfg, dict):
+        return False
+
+    def _falsey(value) -> bool:
+        if isinstance(value, bool):
+            return value is False
+        if isinstance(value, str):
+            return value.strip().lower() in {"0", "false", "no", "off", "disabled"}
+        return False
+
+    if "enabled" in cfg and _falsey(cfg.get("enabled")):
+        return True
+    disabled = cfg.get("disabled")
+    if isinstance(disabled, bool):
+        return disabled
+    if isinstance(disabled, str):
+        return disabled.strip().lower() in {"1", "true", "yes", "on", "disabled"}
+    return False
+
+
+def _compose_configured_provider_models(
+    user_providers: dict | None,
+    slug: str,
+    discovered_models: list[str],
+) -> tuple[list[str], bool]:
+    """Compose declared and discovered models for a built-in provider row.
+
+    Returns ``(models, authoritative)``. ``discover_models: false`` makes the
+    declaration authoritative even when it is empty; otherwise declarations
+    extend discovery with stable de-duplication.
+    """
+    cfg = (
+        user_providers.get((slug or "").strip().lower())
+        if isinstance(user_providers, dict)
+        else None
+    )
+    if not isinstance(cfg, dict):
+        return list(discovered_models), False
+
+    declared: list[str] = []
+    for key in ("default_model", "model"):
+        value = cfg.get(key)
+        if isinstance(value, str) and value.strip() and value.strip() not in declared:
+            declared.append(value.strip())
+    for model_id in _declared_model_ids(cfg.get("models", [])):
+        if model_id not in declared:
+            declared.append(model_id)
+
+    discover = cfg.get("discover_models", True)
+    if isinstance(discover, str):
+        discover = discover.strip().lower() not in {"0", "false", "no", "off"}
+    if discover is False:
+        return declared, True
+    return list(dict.fromkeys([*declared, *discovered_models])), False
 
 
 # ---------------------------------------------------------------------------
@@ -1255,6 +1324,21 @@ def switch_model(
             if not api_key:
                 api_key = "no-key-required"
 
+    # --- Resolve api_mode from the final (provider, base_url) before validation ---
+    # Two cases this closes, both surfaced when the switched model's reasoning
+    # is actually applied (post the reasoning-unification refactor):
+    #   1. api_mode empty (e.g. alias cleared it above) → fill from the endpoint.
+    #   2. api_mode carried a STALE value from the previous session state
+    #      (e.g. a same-provider /model switch to gpt-5.x on api.openai.com that
+    #      kept the prior openrouter/chat_completions mode). A host that mandates
+    #      one wire protocol must override the stale value — otherwise the request
+    #      goes out on chat_completions and OpenAI 400s on tools+reasoning_effort.
+    _mandated_mode = host_mandated_api_mode(base_url)
+    if _mandated_mode is not None:
+        api_mode = _mandated_mode
+    elif not api_mode:
+        api_mode = determine_api_mode(target_provider, base_url)
+
     # --- Normalize model name for target provider ---
     new_model = normalize_model_for_provider(new_model, target_provider)
 
@@ -1413,6 +1497,25 @@ def _credential_pool_is_usable(provider: str, *, raw_pool_present: bool = False)
     return raw_pool_present
 
 
+def _credential_pool_is_visible_for_listing(
+    provider: str,
+    *,
+    for_picker: bool,
+    raw_pool_present: bool = False,
+) -> bool:
+    """Keep exhausted pools visible only in the interactive model picker."""
+    if _credential_pool_is_usable(provider, raw_pool_present=raw_pool_present):
+        return True
+    if not for_picker:
+        return False
+    try:
+        from agent.credential_pool import load_pool
+
+        return bool(load_pool(provider).has_credentials())
+    except Exception:
+        return False
+
+
 def _extra_headers_from_config(entry: Any) -> dict[str, str]:
     if not isinstance(entry, dict):
         return {}
@@ -1480,6 +1583,7 @@ def list_authenticated_providers(
     refresh: bool = False,
     probe_custom_providers: bool = True,
     probe_current_custom_provider: bool = False,
+    for_picker: bool = False,
 ) -> List[dict]:
     """Detect which providers have credentials and list their curated models.
 
@@ -1670,6 +1774,8 @@ def list_authenticated_providers(
     from hermes_cli.models import _AGGREGATOR_PROVIDERS as _AGG_PROVIDERS
     from hermes_cli.providers import ALIASES as _PROVIDER_ALIAS_TABLE
     for hermes_id, mdev_id in PROVIDER_TO_MODELS_DEV.items():
+        if _provider_config_disabled(user_providers, hermes_id):
+            continue
         # Skip vendor names that are merely aliases routing through an
         # aggregator (e.g. bare "openai" → "openrouter"). These are NOT
         # directly-routable providers: emitting them as their own picker
@@ -1725,8 +1831,10 @@ def list_authenticated_providers(
                     store and store.get("credential_pool", {}).get(hermes_id)
                 )
                 if raw_pool_present:
-                    has_creds = _credential_pool_is_usable(
-                        hermes_id, raw_pool_present=True
+                    has_creds = _credential_pool_is_visible_for_listing(
+                        hermes_id,
+                        for_picker=for_picker,
+                        raw_pool_present=True,
                     )
             except Exception:
                 pass
@@ -1742,15 +1850,14 @@ def list_authenticated_providers(
             model_ids = curated.get(hermes_id, [])
             if hermes_id in _MODELS_DEV_PREFERRED:
                 model_ids = _merge_with_models_dev(hermes_id, model_ids)
-        # A providers.<built-in>.models block extends the provider's discovered
-        # catalog. Section 3 cannot emit it later because this built-in row owns
-        # the slug, so merge declarations here before applying max_models.
-        configured_models: list[str] = []
-        if isinstance(user_providers, dict):
-            configured = user_providers.get(hermes_id)
-            if isinstance(configured, dict):
-                configured_models = _declared_model_ids(configured.get("models"))
-        model_ids = list(dict.fromkeys([*configured_models, *model_ids]))
+        model_ids, configured_authoritative = _compose_configured_provider_models(
+            user_providers, hermes_id, model_ids
+        )
+        source = "built-in"
+        is_user_defined = False
+        if configured_authoritative:
+            source = "user-config"
+            is_user_defined = True
         total = len(model_ids)
         if hermes_id in _UNCAPPED_PICKER_PROVIDERS:
             top = model_ids  # Aggregator: show full catalog regardless of max_models
@@ -1765,10 +1872,10 @@ def list_authenticated_providers(
             "slug": slug,
             "name": display_name,
             "is_current": slug == current_provider or mdev_id == current_provider,
-            "is_user_defined": False,
+            "is_user_defined": is_user_defined,
             "models": top,
             "total_models": total,
-            "source": "built-in",
+            "source": source,
         })
         seen_slugs.add(slug.lower())
         seen_mdev_ids.add(mdev_id)
@@ -1789,6 +1896,8 @@ def list_authenticated_providers(
 
         # Resolve Hermes slug — e.g. "github-copilot" → "copilot"
         hermes_slug = _mdev_to_hermes.get(pid, pid)
+        if _provider_config_disabled(user_providers, pid) or _provider_config_disabled(user_providers, hermes_slug):
+            continue
         if hermes_slug.lower() in seen_slugs:
             continue
 
@@ -1825,7 +1934,9 @@ def list_authenticated_providers(
         # imports on demand but aren't in the raw auth.json yet.
         if not has_creds:
             try:
-                if _credential_pool_is_usable(hermes_slug):
+                if _credential_pool_is_visible_for_listing(
+                    hermes_slug, for_picker=for_picker
+                ):
                     has_creds = True
             except Exception as exc:
                 logger.debug("Credential pool check failed for %s: %s", hermes_slug, exc)
@@ -1915,6 +2026,14 @@ def list_authenticated_providers(
                 model_ids = curated.get(hermes_slug, []) or curated.get(pid, [])
                 if hermes_slug in _MODELS_DEV_PREFERRED:
                     model_ids = _merge_with_models_dev(hermes_slug, model_ids)
+        model_ids, configured_authoritative = _compose_configured_provider_models(
+            user_providers, hermes_slug, model_ids
+        )
+        source = "hermes"
+        is_user_defined = False
+        if configured_authoritative:
+            source = "user-config"
+            is_user_defined = True
         total = len(model_ids)
         if hermes_slug in _UNCAPPED_PICKER_PROVIDERS:
             top = model_ids  # Aggregator: show full catalog regardless of max_models
@@ -1925,10 +2044,10 @@ def list_authenticated_providers(
             "slug": hermes_slug,
             "name": get_label(hermes_slug),
             "is_current": hermes_slug == current_provider or pid == current_provider,
-            "is_user_defined": False,
+            "is_user_defined": is_user_defined,
             "models": top,
             "total_models": total,
-            "source": "hermes",
+            "source": source,
         })
         seen_slugs.add(pid.lower())
         seen_slugs.add(hermes_slug.lower())
@@ -1944,6 +2063,8 @@ def list_authenticated_providers(
         _canon_provs = []
 
     for _cp in _canon_provs:
+        if _provider_config_disabled(user_providers, _cp.slug):
+            continue
         if _cp.slug.lower() in seen_slugs:
             continue
 
@@ -1964,7 +2085,9 @@ def list_authenticated_providers(
                 pass
         if not _cp_has_creds:
             try:
-                if _credential_pool_is_usable(_cp.slug):
+                if _credential_pool_is_visible_for_listing(
+                    _cp.slug, for_picker=for_picker
+                ):
                     _cp_has_creds = True
             except Exception:
                 pass
@@ -1991,6 +2114,14 @@ def list_authenticated_providers(
             _cp_model_ids = cached_provider_model_ids(_cp.slug)
             if not _cp_model_ids:
                 _cp_model_ids = curated.get(_cp.slug, [])
+        _cp_model_ids, configured_authoritative = _compose_configured_provider_models(
+            user_providers, _cp.slug, _cp_model_ids
+        )
+        source = "canonical"
+        is_user_defined = False
+        if configured_authoritative:
+            source = "user-config"
+            is_user_defined = True
         _cp_total = len(_cp_model_ids)
         _cp_top = _cp_model_ids[:max_models] if max_models is not None else _cp_model_ids
 
@@ -1998,10 +2129,10 @@ def list_authenticated_providers(
             "slug": _cp.slug,
             "name": _cp.label,
             "is_current": _cp.slug == current_provider,
-            "is_user_defined": False,
+            "is_user_defined": is_user_defined,
             "models": _cp_top,
             "total_models": _cp_total,
-            "source": "canonical",
+            "source": source,
         })
         seen_slugs.add(_cp.slug.lower())
         _record_builtin_endpoint(_cp.slug)
@@ -2017,6 +2148,12 @@ def list_authenticated_providers(
     if user_providers and isinstance(user_providers, dict):
         for ep_name, ep_cfg in user_providers.items():
             if not isinstance(ep_cfg, dict):
+                continue
+            # Explicitly disabled providers must never surface, even via the
+            # user-config section (a built-in we suppressed above would
+            # otherwise reappear here as a user endpoint).
+            if _provider_config_disabled(user_providers, ep_name):
+                seen_slugs.add(ep_name.lower())
                 continue
             # Skip if this slug was already emitted (e.g. canonical provider
             # with the same name) or will be picked up by section 4.
@@ -2472,6 +2609,7 @@ def list_picker_providers(
         custom_providers=custom_providers,
         max_models=max_models,
         current_model=current_model,
+        for_picker=True,
     )
     if include_moa:
         providers = _prepend_moa_picker_provider(providers, current_provider=current_provider)

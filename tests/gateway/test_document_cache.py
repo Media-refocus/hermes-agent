@@ -155,6 +155,8 @@ class TestSupportedDocumentTypes:
             ".pdf",
             ".md",
             ".txt",
+            ".html",
+            ".htm",
             ".zip",
             ".doc",
             ".docx",
@@ -166,6 +168,10 @@ class TestSupportedDocumentTypes:
     )
     def test_expected_extensions_present(self, ext):
         assert ext in SUPPORTED_DOCUMENT_TYPES
+
+    @pytest.mark.parametrize("ext", [".html", ".htm"])
+    def test_html_extensions_use_text_html(self, ext):
+        assert SUPPORTED_DOCUMENT_TYPES[ext] == "text/html"
 
 
 # ---------------------------------------------------------------------------
