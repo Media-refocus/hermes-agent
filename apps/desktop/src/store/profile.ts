@@ -952,8 +952,9 @@ export function selectProfile(name: string): void {
   const target = normalizeProfileKey(name)
   // Switching profiles (or coming back from the all-profiles browse view) starts
   // fresh; re-tapping the profile you're already in leaves your session be.
-  const switching = $showAllProfiles.get() || target !== normalizeProfileKey($activeGatewayProfile.get())
+  const switching = $showAllProfiles.get() || $showMyProfiles.get() || target !== normalizeProfileKey($activeGatewayProfile.get())
   $showAllProfiles.set(false)
+  $showMyProfiles.set(false)
   $newChatProfile.set(target)
   $newChatRoute.set(null)
   // Clearing the agent route must NOT discard the registry identity: the pick
