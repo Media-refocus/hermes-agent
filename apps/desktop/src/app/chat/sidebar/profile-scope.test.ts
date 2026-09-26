@@ -29,10 +29,12 @@ describe('filterSessionsByProfileScope', () => {
   })
 
   it('does not empty ALL scope when every row is one profile', () => {
-    // Grouping → Profile persists ALL even with one profile. Filtering
-    // against the `__all__` sentinel would empty recents and pins.
     const rows = [row('a', 'default'), row('b', 'default'), row('c', 'default')]
-
     expect(filterSessionsByProfileScope(rows, ALL_PROFILES)).toBe(rows)
+  })
+
+  it('leaves route-filtering to selected pairs in My profiles scope', () => {
+    const rows = [row('a', 'default'), row('b', 'default')]
+    expect(filterSessionsByProfileScope(rows, '__my_profiles__')).toBe(rows)
   })
 })

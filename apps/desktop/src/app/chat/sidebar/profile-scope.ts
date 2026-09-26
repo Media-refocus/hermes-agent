@@ -1,4 +1,4 @@
-import { ALL_PROFILES, normalizeProfileKey } from '@/store/profile'
+import { ALL_PROFILES, MY_PROFILES_SCOPE, normalizeProfileKey } from '@/store/profile'
 import type { SessionInfo } from '@/types/hermes'
 
 /**
@@ -9,7 +9,7 @@ import type { SessionInfo } from '@/types/hermes'
  * while grouped rendering stays off. Never filter against `__all__`.
  */
 export function filterSessionsByProfileScope(sessions: SessionInfo[], profileScope: string): SessionInfo[] {
-  if (profileScope === ALL_PROFILES) {
+  if (profileScope === ALL_PROFILES || profileScope === MY_PROFILES_SCOPE) {
     return sessions
   }
 

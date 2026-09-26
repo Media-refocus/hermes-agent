@@ -2633,6 +2633,10 @@ export interface Translations {
     failedImport: string
     failedExport: string
     allProfiles: string
+    myProfiles: string
+    gatewayOffline: (gateway: string) => string
+    loadingProfiles: string
+    noProfilesFound: string
     showAllProfiles: string
     switchToProfile: (name: string) => string
     switchToConnection: (name: string) => string

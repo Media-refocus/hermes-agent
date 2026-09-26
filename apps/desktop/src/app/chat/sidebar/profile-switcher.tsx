@@ -83,6 +83,7 @@ import {
   setProfileColor,
   setProfileOrder,
   setShowAllProfiles,
+  setShowMyProfiles,
   sortByProfileOrder
 } from '@/store/profile'
 import {
@@ -107,6 +108,7 @@ import { PROFILES_ROUTE, SETTINGS_ROUTE } from '../../routes'
 import { ConnectionGlyph } from './connection-glyph'
 import { buildRestGroups, countRestAgents, type FleetAgent, type FleetGroup, fleetRouteKey } from './fleet-rail'
 import { useLocalDeviceSwitch } from './local-device-switch'
+import { MyProfilesPicker } from './my-profiles-picker'
 import { ProfileLaunchContextMenu, ProfileLaunchMenuSection } from './profile-launch-menu'
 import { ProfileRemoteOverrideDialog } from './profile-remote-override-dialog'
 import { useFleetRoster } from './use-fleet-roster'
@@ -236,6 +238,7 @@ export function ProfileRail() {
   // Route key of the at-rest square whose switch is dialing (spinner on that
   // square, not in the statusbar — the previous source stays painted).
   const [pendingRoute, setPendingRoute] = useState<null | string>(null)
+  const [myProfilesOpen, setMyProfilesOpen] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const { dialog: localDeviceDialog, request: requestLocalDevice } = useLocalDeviceSwitch()
 
@@ -360,6 +363,7 @@ export function ProfileRail() {
   }, [condensed])
 
   const isAll = scope === ALL_PROFILES
+  const isMine = scope === '__my_profiles__'
   const activeKey = normalizeProfileKey(gatewayProfile)
   const defaultProfile = profiles.find(profile => profile.is_default)
   const onDefault = !isAll && activeKey === 'default'
@@ -509,9 +513,15 @@ export function ProfileRail() {
           active={isAll}
           glyph="layers"
           label={p.fleet.allOnGateway}
-          onSelect={() => setShowAllProfiles(true)}
+          onSelect={() => { setShowMyProfiles(false); setShowAllProfiles(true) }}
         />
       )}
+      <ProfilePill
+        active={isMine}
+        glyph="filter"
+        label={p.myProfiles}
+        onSelect={() => { setShowMyProfiles(true); setMyProfilesOpen(true) }}
+      />
 
       {/* One button toggles default ↔ all: home face when scoped to a profile,
           layers face when showing everything. Pinned left like Manage is right.
@@ -630,6 +640,7 @@ export function ProfileRail() {
       <ProfilePill active={false} glyph="ellipsis" label={p.manageProfiles} onSelect={() => navigate(PROFILES_ROUTE)} />
 
       {localDeviceDialog}
+      <MyProfilesPicker onOpenChange={setMyProfilesOpen} open={myProfilesOpen} />
 
       {/* Multi-gateway discoverability: before a second source exists, a plug
           pinned beside Manage deep-links to the unified Gateways page. Once

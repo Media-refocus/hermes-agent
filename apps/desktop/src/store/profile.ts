@@ -912,10 +912,11 @@ export async function ensureGatewayAgent(
 // fans every profile's sessions into one grouped, browsable list.
 
 export const ALL_PROFILES = '__all__'
+export const MY_PROFILES_SCOPE = '__my_profiles__'
 
 /** Normalize a sidebar scope to the profile key used by session and cron queries. */
 export const sidebarProfileForScope = (profileScope: string): string =>
-  profileScope === ALL_PROFILES ? 'all' : normalizeProfileKey(profileScope)
+  profileScope === MY_PROFILES_SCOPE ? MY_PROFILES_SCOPE : profileScope === ALL_PROFILES ? 'all' : normalizeProfileKey(profileScope)
 
 /** Key a platform total by its Desktop profile route so counts cannot leak across profiles. */
 export const messagingTotalsKey = (messagingProfile: string, sourceId: string): string =>
@@ -926,6 +927,7 @@ const SHOW_ALL_PROFILES_STORAGE_KEY = 'hermes.desktop.showAllProfiles'
 // Opt-in unified view. When false, scope follows the live gateway profile, so
 // single-profile users (who never see the switcher) are completely unaffected.
 export const $showAllProfiles = atom<boolean>(storedBoolean(SHOW_ALL_PROFILES_STORAGE_KEY, false))
+export const $showMyProfiles = atom<boolean>(false)
 
 $showAllProfiles.subscribe(value => persistBoolean(SHOW_ALL_PROFILES_STORAGE_KEY, value))
 
@@ -934,9 +936,14 @@ $showAllProfiles.subscribe(value => persistBoolean(SHOW_ALL_PROFILES_STORAGE_KEY
 // gateway so opening/selecting a profile (which swaps the gateway) moves the
 // whole sidebar with it — a real context switch, not a separate filter to keep
 // in sync.
-export const $profileScope = computed([$showAllProfiles, $activeGatewayProfile], (showAll, gateway) =>
-  showAll ? ALL_PROFILES : normalizeProfileKey(gateway)
+export const $profileScope = computed([$showAllProfiles, $showMyProfiles, $activeGatewayProfile], (showAll, showMine, gateway) =>
+  showMine ? MY_PROFILES_SCOPE : showAll ? ALL_PROFILES : normalizeProfileKey(gateway)
 )
+
+export function setShowMyProfiles(value: boolean): void {
+  $showMyProfiles.set(value)
+  if (value) $showAllProfiles.set(false)
+}
 
 // Switch the active context to `name`: leave "All profiles" mode, point new
 // chats at it, and swap the single live gateway onto its backend (which moves
@@ -1094,6 +1101,7 @@ export function newSessionInAgent(route: AgentProfileRoute): void {
 }
 
 export function setShowAllProfiles(value: boolean): void {
+  if (value) $showMyProfiles.set(false)
   $showAllProfiles.set(value)
 }
 

@@ -18,7 +18,8 @@ import {
   SIDEBAR_FILTERED_PAGE_SIZE,
   SIDEBAR_SESSIONS_PAGE_SIZE
 } from '@/store/layout'
-import { messagingTotalsKey, normalizeProfileKey, sidebarProfileForScope } from '@/store/profile'
+import { loadMyProfiles, mergeMyProfileSessions, $myProfilesSelection } from '@/store/my-profiles'
+import { MY_PROFILES_SCOPE, messagingTotalsKey, normalizeProfileKey, sidebarProfileForScope } from '@/store/profile'
 import {
   $messagingSessions,
   $selectedStoredSessionId,
@@ -294,6 +295,23 @@ export function useSessionListActions({ profileScope }: UseSessionListActionsArg
         refreshSessionsRequestRef.current === requestId &&
         sidebarProfileForScope(profileScopeRef.current) === sessionProfile
 
+      if (sessionProfile === MY_PROFILES_SCOPE) {
+        try {
+          const results = await loadMyProfiles()
+          if (owns()) {
+            setSessions(mergeMyProfileSessions(results))
+            setCronSessions([])
+            setMessagingSessions([])
+            setSessionsLoadError(false)
+          }
+        } catch {
+          if (owns()) setSessionsLoadError(true)
+        } finally {
+          if (showLoading && owns()) setSessionsLoading(false)
+        }
+        return
+      }
+
       try {
         const limit = $sessionsLimit.get()
 
@@ -480,6 +498,10 @@ export function useSessionListActions({ profileScope }: UseSessionListActionsArg
       }),
     [refreshSessions]
   )
+
+  useEffect(() => $myProfilesSelection.subscribe(() => {
+    if (profileScopeRef.current === MY_PROFILES_SCOPE) void refreshSessions()
+  }), [refreshSessions])
 
   return {
     loadMoreMessagingForPlatform,
