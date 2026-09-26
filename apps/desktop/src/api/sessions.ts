@@ -210,6 +210,8 @@ export interface SidebarSessionsResponse {
 }
 
 export interface SidebarSessionsRequest {
+  /** Explicit registry source for virtual multi-profile scope reads. */
+  connectionId?: string
   recentsProfile: 'all' | (string & {})
   recentsLimit: number
   recentsExclude: string[]
@@ -321,6 +323,7 @@ export async function listSidebarSessions(req: SidebarSessionsRequest): Promise<
 
   try {
     result = await hermesApi<SidebarSessionsResponse>({
+      ...(req.connectionId ? { connectionId: req.connectionId } : {}),
       ...profileScoped(),
       path: `/api/profiles/sessions/sidebar?${params.toString()}`,
       timeoutMs: SESSION_LIST_REQUEST_TIMEOUT_MS
