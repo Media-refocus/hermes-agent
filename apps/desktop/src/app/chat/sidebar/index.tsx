@@ -81,6 +81,7 @@ import {
   $profiles,
   $profileScope,
   ALL_PROFILES,
+  MY_PROFILES_SCOPE,
   messagingTotalsKey,
   normalizeProfileKey,
   sidebarProfileForScope
@@ -126,6 +127,7 @@ import {
   markAllSessionsRead,
   sessionPinId
 } from '@/store/session'
+import { $myProfilesGatewayErrors } from '@/store/my-profiles'
 import { $sessionDotStateById, sessionStatusBucket } from '@/store/session-dot-state'
 import { $unconfirmedPinWrites } from '@/store/session-pin-sync'
 import { $removedSessionIds } from '@/store/session-removal'
@@ -482,6 +484,7 @@ export function ChatSidebar({
   const messagingTruncated = useStore($messagingTruncated)
   const sessionsLoading = useStore($sessionsLoading)
   const sessionsLoadError = useStore($sessionsLoadError)
+  const myProfilesGatewayErrors = useStore($myProfilesGatewayErrors)
   const sessionProfilesTruncated = useStore($sessionProfilesTruncated)
   const unreadCount = useStore($unreadFinishedSessionIds).length
   const profiles = useStore($profiles)
@@ -1758,6 +1761,17 @@ export function ChatSidebar({
                 showProfileTags={showAllProfiles}
               />
             )}
+
+            {profileScope === MY_PROFILES_SCOPE &&
+              myProfilesGatewayErrors.map(error => (
+                <p
+                  className="mx-2 rounded-md bg-(--ui-warning-subtle) px-2 py-1 text-xs text-(--ui-text-secondary)"
+                  key={`${error.connectionId}::${error.profile}`}
+                  role="status"
+                >
+                  {t.profiles.gatewayOffline(error.connectionId)}
+                </p>
+              ))}
 
             {!trimmedQuery && (
               <SidebarSessionsSection

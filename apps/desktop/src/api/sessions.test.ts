@@ -20,7 +20,8 @@ const {
   setSessionArchived,
   setSessionPinnedRemote,
   setSessionUnreadRemote,
-  listSidebarSessions
+  listSidebarSessions,
+  renameSession
 } = await import('./sessions')
 
 const hermesApi = vi.mocked(client.hermesApi)
@@ -245,5 +246,22 @@ describe('listSidebarSessions storage health', () => {
     })
 
     expect(result.storage).toEqual({ default: 'corrupt' })
+  })
+
+  it('routes rename and archive to the exact connection and multiplexed profile owner', async () => {
+    hermesApi.mockResolvedValue({ ok: true, title: 'renamed' } as never)
+    const owner = { connectionId: 'gateway-b', profile: 'default' }
+    await renameSession('same-session', 'renamed', owner)
+    await setSessionArchived('same-session', true, owner)
+    expect(hermesApi.mock.calls[0][0]).toMatchObject({
+      connectionId: 'gateway-b',
+      profile: 'default',
+      body: { title: 'renamed', profile: 'default' }
+    })
+    expect(hermesApi.mock.calls[1][0]).toMatchObject({
+      connectionId: 'gateway-b',
+      profile: 'default',
+      body: { archived: true, profile: 'default' }
+    })
   })
 })

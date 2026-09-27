@@ -94,7 +94,10 @@ export async function renameSessionPreferringRpc(
     }
   }
 
-  return renameSession(storedSessionId, title, profile)
+  const row = $sessions.get().find(session => sessionMatchesStoredId(session, storedSessionId))
+  const owner = row?.connection_id && row.profile ? { connectionId: row.connection_id, profile: row.profile } : profile
+
+  return renameSession(storedSessionId, title, owner)
 }
 
 interface SessionActions {

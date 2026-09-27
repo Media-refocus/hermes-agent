@@ -2988,7 +2988,13 @@ export function useSessionActions({
       }
 
       try {
-        await setSessionArchived(storedSessionId, true, profile)
+        await setSessionArchived(
+          storedSessionId,
+          true,
+          archived?.connection_id && archived.profile
+            ? { connectionId: archived.connection_id, profile: archived.profile }
+            : profile
+        )
         // Archived rows never reach the sidebar, so their persisted unread can
         // only rot. Dropped after the RPC so a failed archive keeps it.
         forgetSessionUnread(archivedIds, profile)
@@ -3037,7 +3043,13 @@ export function useSessionActions({
       const profile = archived?.profile?.trim() || undefined
 
       try {
-        await setSessionArchived(storedSessionId, false, profile)
+        await setSessionArchived(
+          storedSessionId,
+          false,
+          archived?.connection_id && archived.profile
+            ? { connectionId: archived.connection_id, profile: archived.profile }
+            : profile
+        )
 
         // Drop the archived-view row first so the view reflects the restore
         // even when the session cannot be re-listed below (e.g. it belongs to

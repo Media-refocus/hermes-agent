@@ -24,7 +24,11 @@ export function parseMyProfileRoute(key: string): MyProfileRoute | null {
 function loadSelection(): string[] {
   const value = readJson<unknown>(MY_PROFILES_SELECTION_STORAGE_KEY)
   return Array.isArray(value)
-    ? [...new Set(value.filter((item): item is string => typeof item === 'string' && parseMyProfileRoute(item) !== null))]
+    ? [
+        ...new Set(
+          value.filter((item): item is string => typeof item === 'string' && parseMyProfileRoute(item) !== null)
+        )
+      ]
     : []
 }
 
@@ -59,42 +63,80 @@ export interface MyProfilesProjectTree {
 }
 
 let refreshGeneration = 0
+export const $myProfilesGatewayErrors = atom<Array<{ connectionId: string; profile: string; message: string }>>([])
 
-/** Read each selected gateway/profile explicitly. Requests never fall back to the active route. */
-export async function loadMyProfiles(options: {
-  routes?: MyProfileRoute[]
-  limit?: number
-} = {}): Promise<MyProfilesGatewayResult[]> {
+/** Read all pages per selected gateway/profile explicitly, never filtering a partial page. */
+export async function loadMyProfiles(
+  options: {
+    routes?: MyProfileRoute[]
+    limit?: number
+  } = {}
+): Promise<MyProfilesGatewayResult[]> {
   const generation = ++refreshGeneration
   const routes = options.routes ?? selectedMyProfileRoutes()
-  const limit = options.limit ?? 100
-  const results = await Promise.all(routes.map(async route => {
-    try {
-      const result = await listSidebarSessions({
-        connectionId: route.connectionId,
-        recentsProfile: route.profile,
-        recentsLimit: limit,
-        recentsExclude: ['cron', 'kanban', 'oneshot', 'subagent', 'tool', 'telegram', 'discord', 'slack', 'email'],
-        cronLimit: 1,
-        messagingLimit: 1,
-        messagingExclude: ['cron']
-      } as Parameters<typeof listSidebarSessions>[0] & { connectionId: string })
-      return {
-        connectionId: route.connectionId,
-        sessions: result.recents.sessions.filter(session => session.profile === route.profile)
-          .map(session => ({ ...session, connection_id: route.connectionId }))
+  const initialLimit = Math.max(1, options.limit ?? 100)
+  const results = await Promise.all(
+    routes.map(async route => {
+      try {
+        let limit = initialLimit
+        let rows: SessionInfo[] = []
+        while (true) {
+          const result = await listSidebarSessions({
+            connectionId: route.connectionId,
+            recentsProfile: route.profile,
+            recentsLimit: limit,
+            recentsExclude: ['cron', 'kanban', 'oneshot', 'subagent', 'tool', 'telegram', 'discord', 'slack', 'email'],
+            cronLimit: 1,
+            messagingLimit: 1,
+            messagingExclude: ['cron']
+          } as Parameters<typeof listSidebarSessions>[0] & { connectionId: string })
+          rows = result.recents.sessions
+          if (rows.length < limit || limit >= 2000) break
+          limit = Math.min(limit * 2, 2000)
+        }
+        return {
+          connectionId: route.connectionId,
+          sessions: rows
+            .filter(session => (session.profile || 'default') === route.profile)
+            .map(session => ({ ...session, connection_id: route.connectionId, profile: route.profile }))
+        }
+      } catch (error) {
+        return {
+          connectionId: route.connectionId,
+          sessions: [],
+          error: error instanceof Error ? error.message : String(error)
+        }
       }
-    } catch (error) {
-      return { connectionId: route.connectionId, sessions: [], error: error instanceof Error ? error.message : String(error) }
-    }
-  }))
-  return generation === refreshGeneration ? results : []
+    })
+  )
+  if (generation === refreshGeneration) {
+    $myProfilesGatewayErrors.set(
+      results.flatMap(result =>
+        result.error
+          ? [
+              {
+                connectionId: result.connectionId,
+                profile: routes.find(route => route.connectionId === result.connectionId)?.profile ?? 'default',
+                message: result.error
+              }
+            ]
+          : []
+      )
+    )
+    return results
+  }
+  return []
 }
 
-export function invalidateMyProfilesRefresh(): void { refreshGeneration++ }
+export function invalidateMyProfilesRefresh(): void {
+  refreshGeneration++
+}
 
 /** Namespace projects by exact route to prevent same-name/id collisions across gateways. */
-export function namespaceMyProfileProjectTree(route: MyProfileRoute, tree: { projects?: Array<{ id: string; label: string; path?: string | null; previewSessions?: SessionInfo[] }> }): MyProfilesProjectTree {
+export function namespaceMyProfileProjectTree(
+  route: MyProfileRoute,
+  tree: { projects?: Array<{ id: string; label: string; path?: string | null; previewSessions?: SessionInfo[] }> }
+): MyProfilesProjectTree {
   return {
     connectionId: route.connectionId,
     profile: route.profile,
@@ -102,7 +144,11 @@ export function namespaceMyProfileProjectTree(route: MyProfileRoute, tree: { pro
       id: `${route.connectionId}::${project.id}`,
       label: project.label,
       path: project.path ?? null,
-      sessions: (project.previewSessions ?? []).map(session => ({ ...session, connection_id: route.connectionId, profile: route.profile }))
+      sessions: (project.previewSessions ?? []).map(session => ({
+        ...session,
+        connection_id: route.connectionId,
+        profile: route.profile
+      }))
     }))
   }
 }
@@ -110,7 +156,9 @@ export function namespaceMyProfileProjectTree(route: MyProfileRoute, tree: { pro
 /** Fetch project tree on the selected registered gateway; caller owns degraded-state presentation. */
 export async function loadMyProfileProjectTree(route: MyProfileRoute): Promise<MyProfilesProjectTree> {
   try {
-    const tree = await hermesApi<{ projects?: Array<{ id: string; label: string; path?: string | null; previewSessions?: SessionInfo[] }> }>({
+    const tree = await hermesApi<{
+      projects?: Array<{ id: string; label: string; path?: string | null; previewSessions?: SessionInfo[] }>
+    }>({
       connectionId: route.connectionId,
       profile: route.profile,
       path: '/api/profiles/projects/tree?preview_limit=2000',
@@ -118,7 +166,12 @@ export async function loadMyProfileProjectTree(route: MyProfileRoute): Promise<M
     })
     return namespaceMyProfileProjectTree(route, tree)
   } catch (error) {
-    return { connectionId: route.connectionId, profile: route.profile, projects: [], error: error instanceof Error ? error.message : String(error) }
+    return {
+      connectionId: route.connectionId,
+      profile: route.profile,
+      projects: [],
+      error: error instanceof Error ? error.message : String(error)
+    }
   }
 }
 
