@@ -1,12 +1,17 @@
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 
+import { atom } from 'nanostores'
+
 import { fetchProjectSessions } from '@/store/projects'
 
 import type { SidebarProjectTree } from './projects/workspace-groups'
 import { useEnteredProjectSessions } from './use-entered-project-sessions'
 
-vi.mock('@/store/projects', () => ({ fetchProjectSessions: vi.fn() }))
+vi.mock('@/store/projects', () => ({ fetchProjectSessions: vi.fn(), projectProfile: vi.fn(() => 'default') }))
+vi.mock('@/store/gateway', () => ({ requestGatewayForAgent: vi.fn() }))
+vi.mock('@/store/my-profiles-project-tree', () => ({ projectOwnerRoute: vi.fn() }))
+vi.mock('@/store/profile', () => ({ $profileScope: atom('__all__'), MY_PROFILES_SCOPE: '__my_profiles__' }))
 afterEach(cleanup)
 
 const node = (id: string, sessionCount = 0): SidebarProjectTree => ({

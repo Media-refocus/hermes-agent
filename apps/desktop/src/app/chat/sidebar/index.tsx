@@ -74,6 +74,14 @@ import {
   toggleSidebarMessagingOpen,
   unpinSession
 } from '@/store/layout'
+import { $myProfilesGatewayErrors, $myProfilesSelection } from '@/store/my-profiles'
+import {
+  $myProfilesProjectTree,
+  $myProfilesProjectTreeGatewayErrors,
+  invalidateMyProfilesProjectTree,
+  loadMyProfilesProjectTree,
+  myProfilesProjectOwnerBySessionId
+} from '@/store/my-profiles-project-tree'
 import { notifyError } from '@/store/notifications'
 import {
   $newChatProfile,
@@ -81,8 +89,8 @@ import {
   $profiles,
   $profileScope,
   ALL_PROFILES,
-  MY_PROFILES_SCOPE,
   messagingTotalsKey,
+  MY_PROFILES_SCOPE,
   normalizeProfileKey,
   sidebarProfileForScope
 } from '@/store/profile'
@@ -127,7 +135,6 @@ import {
   markAllSessionsRead,
   sessionPinId
 } from '@/store/session'
-import { $myProfilesGatewayErrors } from '@/store/my-profiles'
 import { $sessionDotStateById, sessionStatusBucket } from '@/store/session-dot-state'
 import { $unconfirmedPinWrites } from '@/store/session-pin-sync'
 import { $removedSessionIds } from '@/store/session-removal'
@@ -530,6 +537,25 @@ export function ChatSidebar({
     [persistedProjectFilter, projectTree]
   )
 
+  // «Mis perfiles» swaps the SOURCE, not the pipeline: the merged multi-gateway
+  // tree feeds the exact same model so the overview renders identically — same
+  // rows, same drill-in, same previews — with projects namespaced per gateway
+  // (`gw::p_abc`) and one cross-gateway Home bucket.
+  const myProfilesTree = useStore($myProfilesProjectTree)
+  const myProfilesGatewayTreeErrors = useStore($myProfilesProjectTreeGatewayErrors)
+  const myProfilesScope = profileScope === MY_PROFILES_SCOPE
+  const treeSource = myProfilesScope ? myProfilesTree : projectTree
+
+  // The live-overlay owner map is scope-shaped: in «Mis perfiles» a session id
+  // only resolves to the project whose tree entry names ITS gateway, so the
+  // same stored id on two hosts cannot cross-claim rows.
+  const myProfilesOwners = useMemo(
+    () => (myProfilesScope ? myProfilesProjectOwnerBySessionId(myProfilesTree, sessions) : null),
+    [myProfilesScope, myProfilesTree, sessions]
+  )
+
+  const ownersBySessionId = myProfilesOwners ?? projectOwners
+
   const projectTreeLoading = useStore($projectTreeLoading)
   const removedSessionIds = useStore($removedSessionIds)
   const reposScanning = useStore($reposScanning)
@@ -631,7 +657,7 @@ export function ChatSidebar({
       // Same membership the sidebar groups and colors by (backend owner first,
       // cwd walk otherwise), so a filtered row lands in the lane the user
       // picked it from.
-      return sessionMatchesProjectFilter(session, projectFilter, projects, projectOwners)
+      return sessionMatchesProjectFilter(session, projectFilter, projects, ownersBySessionId)
     },
     [
       statusFilter,
@@ -641,7 +667,7 @@ export function ChatSidebar({
       prFilter,
       pullRequests,
       projects,
-      projectOwners,
+      ownersBySessionId,
       dotStates
     ]
   )
@@ -833,6 +859,17 @@ export function ChatSidebar({
       return
     }
 
+    // «Mis perfiles»: the tree comes from the per-route fan-out (store), not
+    // the active backend's `projects.tree` — the active gateway owns only one
+    // slice of this view. Selection changes re-run the fan-out on their own.
+    if (myProfilesScope) {
+      void loadMyProfilesProjectTree()
+
+      return
+    }
+
+    invalidateMyProfilesProjectTree()
+
     if (worktreeGroupingActive) {
       void refreshProjects()
 
@@ -863,7 +900,18 @@ export function ChatSidebar({
     const warm = window.setTimeout(() => void refreshProjectTree(), PROJECT_TREE_WARM_MS)
 
     return () => window.clearTimeout(warm)
-  }, [activeConnectionId, worktreeGroupingActive, showAllProfiles, profileScope, gatewayReady])
+  }, [activeConnectionId, worktreeGroupingActive, showAllProfiles, myProfilesScope, profileScope, gatewayReady])
+
+  // A selection change inside «Mis perfiles» re-runs the per-route fan-out.
+  useEffect(
+    () =>
+      $myProfilesSelection.listen(() => {
+        if (gatewayReady && myProfilesScope) {
+          void loadMyProfilesProjectTree()
+        }
+      }),
+    [gatewayReady, myProfilesScope]
+  )
 
   // Widen the existing tree query when the user expands previews, without
   // repeating repo discovery. Initial load/scope changes use the effect above.
@@ -1016,7 +1064,7 @@ export function ChatSidebar({
   // overview sort. Membership is the backend tree's — never re-derived here.
   const projectModel = useMemo<SidebarProjectTree[]>(() => {
     const sorted = sortProjectsForOverview(
-      filterToSessionBearingProjects(filterVisibleProjects(projectTree, dismissedAutoProjects))
+      filterToSessionBearingProjects(filterVisibleProjects(treeSource, dismissedAutoProjects))
         // A filtered-out project drops its whole lane, header included — hiding
         // only its rows would leave a row of empty folders behind.
         .filter(project => !projectFilter.length || projectFilter.includes(project.id))
@@ -1040,7 +1088,7 @@ export function ChatSidebar({
     // keep their sorted position rather than jumping the hand-picked list.
     return orderProjectsByIds(sorted, projectOrderIds)
   }, [
-    projectTree,
+    treeSource,
     dismissedAutoProjects,
     orderRepos,
     activeProjectId,
@@ -1118,9 +1166,9 @@ export function ChatSidebar({
   const enteredProjectContent = useMemo(
     () =>
       enteredProject
-        ? overlayLiveLanes(enteredProject, enteredProjectOverlaySessions, removedSessionIds, projectOwners)
+        ? overlayLiveLanes(enteredProject, enteredProjectOverlaySessions, removedSessionIds, ownersBySessionId)
         : undefined,
-    [enteredProject, enteredProjectOverlaySessions, removedSessionIds, projectOwners]
+    [enteredProject, enteredProjectOverlaySessions, removedSessionIds, ownersBySessionId]
   )
 
   const scopedRepoPaths = useMemo(
@@ -1246,7 +1294,7 @@ export function ChatSidebar({
     const counts: Record<string, number> = {}
 
     for (const session of sessions) {
-      const projectId = isHidden(session) ? sessionBucketId(session, projects, projectOwners) : null
+      const projectId = isHidden(session) ? sessionBucketId(session, projects, ownersBySessionId) : null
 
       if (projectId) {
         counts[projectId] = (counts[projectId] ?? 0) + 1
@@ -1254,7 +1302,7 @@ export function ChatSidebar({
     }
 
     return { isHidden, counts }
-  }, [sessions, projects, projectOwners, isHiddenFromProjects, removedSessionIds])
+  }, [sessions, projects, ownersBySessionId, isHiddenFromProjects, removedSessionIds])
 
   const onEnterProject = useCallback(
     (id: string) => {
@@ -1763,15 +1811,32 @@ export function ChatSidebar({
             )}
 
             {profileScope === MY_PROFILES_SCOPE &&
-              myProfilesGatewayErrors.map(error => (
-                <p
-                  className="mx-2 rounded-md bg-(--ui-warning-subtle) px-2 py-1 text-xs text-(--ui-text-secondary)"
-                  key={`${error.connectionId}::${error.profile}`}
-                  role="status"
-                >
-                  {t.profiles.gatewayOffline(error.connectionId)}
-                </p>
-              ))}
+              [
+                ...myProfilesGatewayErrors.map(error => ({
+                  key: `${error.connectionId}::${error.profile}`,
+                  connectionId: error.connectionId
+                })),
+                // The per-route project tree reports its own failures: a
+                // gateway whose sessions loaded but whose tree read failed is
+                // degraded too, and both lists render so nothing fails silent.
+                ...myProfilesGatewayTreeErrors.map(error => ({
+                  key: `tree:${error.connectionId}`,
+                  connectionId: error.connectionId
+                }))
+              ]
+                .filter((error, index, all) => all.findIndex(other => other.key === error.key) === index)
+                .map(error => (
+                  <p
+                    className="mx-2 rounded-md bg-(--ui-warning-subtle) px-2 py-1 text-xs text-(--ui-text-secondary)"
+                    key={error.key}
+                    role="status"
+                  >
+                    {t.profiles.gatewayOffline(
+                      connectionsRegistry?.connections.find(connection => connection.id === error.connectionId)
+                        ?.label ?? error.connectionId
+                    )}
+                  </p>
+                ))}
 
             {!trimmedQuery && (
               <SidebarSessionsSection

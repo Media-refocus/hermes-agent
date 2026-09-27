@@ -282,6 +282,35 @@ async function listSidebarSessionsLegacy(req: SidebarSessionsRequest): Promise<S
   return response
 }
 
+/** One (connection, profile) pin for the multi-gateway fan-out helpers. */
+export interface SessionRoutePin {
+  connectionId: string
+  profile: string
+}
+
+interface ProjectTreeRoutePayload {
+  projects?: unknown[]
+  errors?: Array<{ profile?: string; error?: string }>
+}
+
+/**
+ * The per-route project tree for the «Mis perfiles» scope: `/api/profiles/projects/tree`
+ * answers for ONE backend's profiles, so each selected (connectionId, profile) pair
+ * asks its own gateway explicitly — never the ambient connection. The payload is the
+ * raw wire shape; namespacing to the exact route happens in the store layer.
+ */
+export async function listSidebarSessionsProjectTree(
+  route: SessionRoutePin,
+  { previewLimit, timeoutMs }: { previewLimit: number; timeoutMs: number }
+): Promise<ProjectTreeRoutePayload> {
+  return hermesApi<ProjectTreeRoutePayload>({
+    connectionId: route.connectionId,
+    profile: route.profile,
+    path: `/api/profiles/projects/tree?preview_limit=${previewLimit}`,
+    timeoutMs
+  })
+}
+
 /** The PR each of these sessions opened, recovered from its own transcript —
  *  for sessions whose recorded branch can't answer (they started on trunk and
  *  did the work in a worktree). Also returns every id it looked at, so the
@@ -370,9 +399,11 @@ export function setSessionArchived(
   profile?: string | null | { connectionId: string; profile: string }
 ): Promise<{ ok: boolean }> {
   const isOwnerRoute = Boolean(profile && typeof profile === 'object')
+
   const ownerProfile = isOwnerRoute
     ? (profile as { connectionId: string; profile: string }).profile
     : sessionWriteProfile(profile as string | null | undefined)
+
   const connectionId = isOwnerRoute ? (profile as { connectionId: string; profile: string }).connectionId : undefined
 
   return hermesApi<{ ok: boolean }>({
@@ -670,9 +701,11 @@ export function renameSession(
   profile?: string | null | { connectionId: string; profile: string }
 ): Promise<{ ok: boolean; title: string }> {
   const isOwnerRoute = Boolean(profile && typeof profile === 'object')
+
   const ownerProfile = isOwnerRoute
     ? (profile as { connectionId: string; profile: string }).profile
     : sessionWriteProfile(profile as string | null | undefined)
+
   const connectionId = isOwnerRoute ? (profile as { connectionId: string; profile: string }).connectionId : undefined
 
   return hermesApi<{ ok: boolean; title: string }>({
