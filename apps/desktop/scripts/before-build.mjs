@@ -96,8 +96,11 @@ function writeMsixExtensions() {
     const template = fs.readFileSync(path.join(desktop, 'assets/msix-manifest.xml'), 'utf8')
     const applications = appExecutionAliasApplications(launchers, { appNamePascal, displayName })
     fs.mkdirSync(path.join(desktop, 'build'), { recursive: true })
+    const stagedTemplate = process.env.HERMES_DESKTOP_VARIANT === 'refocus'
+      ? fs.readFileSync(stageReleaseManifest(desktop, ''), 'utf8')
+      : template
     fs.writeFileSync(path.join(desktop, 'build/msix-manifest.xml'),
-      template.replace('</Applications>', `${applications}\n  </Applications>`))
+      stagedTemplate.replace('</Applications>', `${applications}\n  </Applications>`))
   }
   // The uap3:AppExtension fragment that registers the app as a Windows
   // Copilot hardware key provider. The press activates hermes://copilot-key/start.
