@@ -19,6 +19,12 @@ interface ProductIdentity {
   cliName: string
   /** OS-level app identity w/ org prefix. e.g. "NousResearch.HermesLight" */
   msixAppIdWithOrg: string
+  /** MSIX Publisher string in the package Identity. Present only on refocus
+   * builds: the provisional "CN=Refocus Development" for unsigned
+   * candidates, the exact signing-cert Subject (HERMES_MSIX_PUBLISHER) for
+   * signed builds. Official variants carry theirs out of band
+   * (OUT_OF_STORE_PUBLISHER / storeMsix.publisher). */
+  readonly msixPublisher?: string
   /** R2 identity token on channel builds; absent on legacy products. */
   readonly token?: string
   /** Channel subscription for channel builds; legacy electron-updater label otherwise. Stable tags:

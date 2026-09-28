@@ -9,9 +9,18 @@
 # Identity: HERMES_DESKTOP_VARIANT=refocus + HERMES_BUILD_COMMIT (the commit
 # is stamped for provenance, NOT worn on the product). The candidate is the
 # one installed product 'Hermes Refocus': a stable appId
-# (com.nousresearch.hermes-refocus), MSIX identity (NousResearch.HermesRefocus),
-# display name, userData folder and CLI alias (hermes-refocus) across commits —
-# so each newer candidate updates the previous one in place. Updates are
+# (com.nousresearch.hermes-refocus), MSIX identity Name (Refocus.HermesRefocus)
+# and Publisher (provisional CN=Refocus Development — the definitive Publisher
+# is the exact Subject of the future Refocus signing certificate, unknowable
+# until that cert and its legal entity exist; a build gate in
+# product-identity.cjs REFUSES any signed/installable build without
+# HERMES_MSIX_PUBLISHER naming it), plus display name, userData folder and CLI
+# alias (hermes-refocus) across commits. The Refocus namespace (Name AND
+# Publisher) is never Nous's: Microsoft requires the manifest Publisher to
+# byte-match the signing cert Subject (mismatch = event 150 / 0x8007000B), and
+# a Publisher change AFTER install breaks in-place update — so the
+# provisional-publisher candidate must NEVER be updated over by (or promise to
+# update to) a definitive-publisher build; that move is a fresh install. Updates are
 # stamped `external`: the app never checks a feed; new candidates are manual
 # installs of a higher-versioned MSIX (the package Version rises with the
 # build clock — verified by the version gate below).
@@ -162,15 +171,19 @@ jobs:
           Expand-Archive "$env:RUNNER_TEMP/msix-inspect/candidate.zip" "$env:RUNNER_TEMP/msix-inspect/x"
           [xml]$manifest = Get-Content "$env:RUNNER_TEMP/msix-inspect/x/AppxManifest.xml"
           $identity = $manifest.Package.Identity
-          if ($identity.Name -ne 'NousResearch.HermesRefocus') {
-            Write-Output "::error::MSIX identity Name is $($identity.Name), expected the stable NousResearch.HermesRefocus"
+          if ($identity.Name -ne 'Refocus.HermesRefocus') {
+            Write-Output "::error::MSIX identity Name is $($identity.Name), expected the stable Refocus.HermesRefocus (the refocus namespace — never NousResearch.*)"
+            exit 1
+          }
+          if ($identity.Publisher -ne 'CN=Refocus Development') {
+            Write-Output "::error::MSIX identity Publisher is $($identity.Publisher), expected the provisional 'CN=Refocus Development'. The candidate must never carry a Nous publisher (and an unsigned build must never claim a real one)."
             exit 1
           }
           if ($identity.Version -eq '0.0.0.0') {
             Write-Output "::error::MSIX Version is 0.0.0.0 — the version gate did not run; in-place updates would be refused"
             exit 1
           }
-          Write-Output "identity: $($identity.Name) $($identity.Version)"
+          Write-Output "identity: $($identity.Name) $($identity.Version) publisher=$($identity.Publisher)"
 
       - name: Upload the private candidate artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -207,10 +220,23 @@ jobs:
             echo "  verification only. (An OID-publisher candidate build is a"
             echo "  possible follow-up, still fully unsigned.)"
             echo "- The installed product is stable across commits: one name"
-            echo "  ('Hermes Refocus'), one MSIX identity"
-            echo "  (NousResearch.HermesRefocus), one userData folder and one CLI"
+            echo "  ('Hermes Refocus'), one MSIX identity Name"
+            echo "  (Refocus.HermesRefocus), one userData folder and one CLI"
             echo "  alias (\`hermes-refocus\`). A newer candidate updates the"
-            echo "  previous one in place (higher package Version, same Name)."
+            echo "  previous one in place (higher package Version, same Name"
+            echo "  AND same Publisher)."
+            echo "- Publisher: the candidate carries the PROVISIONAL"
+            echo "  'CN=Refocus Development' (an unsigned build may not claim a"
+            echo "  real one). The DEFINITIVE Publisher is the exact Subject of"
+            echo "  the future Refocus signing certificate — a build gate"
+            echo "  refuses any signed/installable build without it"
+            echo "  (HERMES_MSIX_PUBLISHER). Because a Publisher change after"
+            echo "  install breaks in-place update, nothing built with the"
+            echo "  definitive publisher will ever update over a provisional"
+            echo "  candidate, and no candidate promises otherwise: that move"
+            echo "  is an uninstall + fresh install."
+            echo "- No Nous identity: neither the Name nor the Publisher"
+            echo "  namespace is NousResearch's."
             echo "- No shared update feed with the official Hermes; updates are"
             echo  " stamped \`external\` — never auto-checked."
             echo ""

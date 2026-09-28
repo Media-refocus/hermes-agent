@@ -22,19 +22,30 @@ const COMMIT_B = 'cc8600b4a8c13b7fbb79fbc2a3cc92069cd6bcf7'
 const VERSION_ENV = { HERMES_PAYLOAD_VERSION: '0.28.0' }
 const CANARY_TAG = 'v1.2.3+canary.20260818T000000Z'
 
+const ENV_KEYS = [
+  'HERMES_DESKTOP_VARIANT',
+  'HERMES_PAYLOAD_TAG',
+  'HERMES_BUILD_COMMIT',
+  'HERMES_PAYLOAD_VERSION',
+  // Publisher/signing plumbing the refocus gate reads at require time.
+  'HERMES_MSIX_PUBLISHER',
+  'AZURE_SIGN_ENDPOINT',
+  'AZURE_CLIENT_ID'
+]
+
 beforeEach(() => {
   vi.resetModules()
 })
 
 afterEach(() => {
-  for (const key of ['HERMES_DESKTOP_VARIANT', 'HERMES_PAYLOAD_TAG', 'HERMES_BUILD_COMMIT', 'HERMES_PAYLOAD_VERSION']) {
+  for (const key of ENV_KEYS) {
     delete process.env[key]
   }
   vi.resetModules()
 })
 
 function identityFor(env = {}) {
-  for (const key of ['HERMES_DESKTOP_VARIANT', 'HERMES_PAYLOAD_TAG', 'HERMES_BUILD_COMMIT', 'HERMES_PAYLOAD_VERSION']) {
+  for (const key of ENV_KEYS) {
     delete process.env[key]
     if (env[key] !== undefined) process.env[key] = env[key]
   }
@@ -74,9 +85,71 @@ test('refocus identity is identical across commits (in-place update precondition
   assert.equal(a.displayName, 'Hermes Refocus')
   assert.equal(a.appId, 'com.nousresearch.hermes-refocus')
   assert.equal(a.appNamePascal, 'HermesRefocus')
-  assert.equal(a.msixAppIdWithOrg, 'NousResearch.HermesRefocus')
+  assert.equal(a.msixAppIdWithOrg, 'Refocus.HermesRefocus')
+  assert.equal(a.msixPublisher, 'CN=Refocus Development')
   assert.equal(a.cliName, 'hermes-refocus')
   assert.equal(a.windowsExecutableName, 'hermes-refocus')
+})
+
+test('the refocus MSIX namespace and publisher never borrow the Nous identity', () => {
+  const refocus = refocusIdentity(COMMIT_A)
+  // Name namespace: not NousResearch.*.
+  assert.ok(!/nous/i.test(refocus.msixAppIdWithOrg), `msix Name must not be a Nous namespace: ${refocus.msixAppIdWithOrg}`)
+  // Publisher: never a Nous identity, never the official out-of-store cert.
+  assert.ok(!/nous/i.test(refocus.msixPublisher), `msix Publisher must not be a Nous identity: ${refocus.msixPublisher}`)
+  assert.notEqual(refocus.msixPublisher, 'CN=Nous Research Inc., O=Nous Research Inc., L=Austin, S=Texas, C=US')
+})
+
+test('a signed (installable) refocus build refuses the provisional publisher and demands the cert Subject', () => {
+  // No publisher given + signing vars present = the build gate trips: the
+  // manifest Publisher must byte-match the signing cert Subject (else
+  // install/update is refused, event 150 / 0x8007000B) and only the subject's
+  // legal entity can name it — never a placeholder invented here.
+  assert.throws(
+    () => identityFor({ HERMES_DESKTOP_VARIANT: 'refocus', HERMES_BUILD_COMMIT: COMMIT_A, AZURE_SIGN_ENDPOINT: 'https://sts.example' }),
+    /HERMES_MSIX_PUBLISHER/
+  )
+  assert.throws(
+    () => identityFor({ HERMES_DESKTOP_VARIANT: 'refocus', HERMES_BUILD_COMMIT: COMMIT_A, AZURE_CLIENT_ID: 'client' }),
+    /HERMES_MSIX_PUBLISHER/
+  )
+  // With the Subject supplied, the signed build resolves it verbatim.
+  const subject = 'CN=Refocus SL, O=Refocus, C=ES'
+  const signed = identityFor({
+    HERMES_DESKTOP_VARIANT: 'refocus',
+    HERMES_BUILD_COMMIT: COMMIT_A,
+    AZURE_SIGN_ENDPOINT: 'https://sts.example',
+    HERMES_MSIX_PUBLISHER: subject
+  })
+  assert.equal(signed.msixPublisher, subject)
+})
+
+test('the refocus publisher env rejects Nous identities and template-breaking quotes', () => {
+  assert.throws(
+    () => identityFor({ HERMES_DESKTOP_VARIANT: 'refocus', HERMES_BUILD_COMMIT: COMMIT_A, HERMES_MSIX_PUBLISHER: "CN=Nous Research Inc., O=Nous Research Inc." }),
+    /never a Nous/
+  )
+  assert.throws(
+    () => identityFor({ HERMES_DESKTOP_VARIANT: 'refocus', HERMES_BUILD_COMMIT: COMMIT_A, HERMES_MSIX_PUBLISHER: "CN=Refocus, O='X'" }),
+    /single quotes/
+  )
+  assert.throws(
+    () => identityFor({ HERMES_DESKTOP_VARIANT: 'refocus', HERMES_BUILD_COMMIT: COMMIT_A, HERMES_MSIX_PUBLISHER: 'Refocus SL' }),
+    /CN=/
+  )
+})
+
+test('official variants never carry the refocus publisher or the Refocus namespace', () => {
+  for (const env of [
+    { HERMES_DESKTOP_VARIANT: 'bundled' },
+    { HERMES_DESKTOP_VARIANT: 'light' },
+    { HERMES_DESKTOP_VARIANT: 'store' },
+    {}
+  ]) {
+    const official = identityFor(env)
+    assert.equal(official.msixPublisher, undefined, `${env.HERMES_DESKTOP_VARIANT || '(default)'} must not carry a refocus publisher`)
+    assert.equal(official.msixAppIdWithOrg.startsWith('NousResearch.'), true)
+  }
 })
 
 test('refocus markers disagree with every official identity on all OS markers', () => {
@@ -168,7 +241,9 @@ test('refocus packaging is publish-null even when feed vars leak into the build'
     assert.equal(config.publish, null)
     assert.equal(config.extraMetadata.name, 'HermesRefocus')
     assert.equal(config.extraMetadata.productName, 'Hermes Refocus')
-    assert.equal(config.msix.identityName, 'NousResearch.HermesRefocus')
+    assert.equal(config.msix.identityName, 'Refocus.HermesRefocus')
+    assert.equal(config.msix.publisher, 'CN=Refocus Development')
+    assert.equal(config.msix.publisherDisplayName, 'Refocus')
     assert.equal(config.win.executableName, 'hermes-refocus')
     // Commit builds never claim the release manifest template path.
     assert.equal(config.msix.customManifestPath, 'build/msix-manifest.xml')

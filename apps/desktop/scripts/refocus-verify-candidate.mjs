@@ -69,12 +69,31 @@ const expected = {
   displayName: 'Hermes Refocus',
   appId: 'com.nousresearch.hermes-refocus',
   appNamePascal: 'HermesRefocus',
-  msixAppIdWithOrg: 'NousResearch.HermesRefocus',
+  msixAppIdWithOrg: 'Refocus.HermesRefocus',
   cliName: 'hermes-refocus',
   windowsExecutableName: 'hermes-refocus'
 }
 for (const [field, want] of Object.entries(expected)) {
   if (identity[field] !== want) fail(`identity ${field} is ${JSON.stringify(identity[field])}, expected ${JSON.stringify(want)}`)
+}
+
+// Publisher isolation: the candidate's MSIX Publisher is a REFOCUS identity,
+// never Nous's. Unsigned candidates ride the provisional publisher; a signed
+// (installable) build must have named its cert Subject via
+// HERMES_MSIX_PUBLISHER — the identity module enforces that gate, so a
+// missing/placeholder publisher on a signed build fails above at require
+// time. Here we pin the remaining invariants.
+if (!identity.msixPublisher) fail('identity must carry the refocus msixPublisher (never inherit an official one)')
+if (/nous/i.test(identity.msixPublisher)) fail(`msixPublisher must never be a Nous identity: ${JSON.stringify(identity.msixPublisher)}`)
+const signedBuild = Boolean(process.env.AZURE_SIGN_ENDPOINT || process.env.AZURE_CLIENT_ID)
+if (signedBuild && identity.msixPublisher === 'CN=Refocus Development') {
+  fail('a SIGNED (installable) build must carry the real certificate Subject via HERMES_MSIX_PUBLISHER, not the provisional CN=Refocus Development')
+}
+if (!signedBuild && identity.msixPublisher !== 'CN=Refocus Development') {
+  // Unsigned candidates must be the provisional publisher so a later real
+  // install is never promised to update over this one (a Publisher change
+  // after install breaks in-place update by definition).
+  fail(`an UNSIGNED candidate must carry exactly the provisional 'CN=Refocus Development' (got ${JSON.stringify(identity.msixPublisher)}); the real publisher belongs to signed builds only`)
 }
 
 // The official app must never share a marker with this candidate — including

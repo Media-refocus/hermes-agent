@@ -94,6 +94,50 @@ if (refocus && !buildCommitEnv) {
   throw new Error('Refocus builds require HERMES_BUILD_COMMIT (the commit is stamped, not worn)')
 }
 
+// The MSIX Publisher is HALF the package identity (with the Name): Windows
+// compares the manifest Publisher against the signing certificate's Subject
+// at install (a mismatch is event 150 / 0x8007000B), and once a package is
+// installed a CHANGED Publisher makes later builds a different package —
+// every in-place update is refused
+// (https://learn.microsoft.com/windows/msix/package/signing-known-issues).
+//
+// Refocus owns its publisher and never wears Nous's: the manifest Publisher
+// must be byte-identical to the Subject of the certificate that signs the
+// package, and semantically the product is not a Nous product. The
+// definitive value is the exact Subject of the future Refocus signing
+// certificate — unknowable until that certificate and its legal entity
+// exist — so it MUST arrive via HERMES_MSIX_PUBLISHER at build time.
+//
+// Until then, UNSIGNED build-verification candidates carry the provisional
+// 'CN=Refocus Development'. A publisher change after an install breaks
+// in-place update by definition, so no provisional-publisher build may ever
+// claim to update (or be updated by) a definitive-publisher build: moving
+// from the provisional candidate to the real product is a FRESH INSTALL
+// (uninstall first), never an update.
+const REFOCUS_PUBLISHER_ENV = 'HERMES_MSIX_PUBLISHER'
+const PROVISIONAL_REFOCUS_PUBLISHER = 'CN=Refocus Development'
+const refocusSignedBuild = Boolean(process.env.AZURE_SIGN_ENDPOINT || process.env.AZURE_CLIENT_ID)
+let refocusPublisher = (process.env[REFOCUS_PUBLISHER_ENV] || '').trim()
+if (refocusPublisher) {
+  if (!/^CN=../.test(refocusPublisher)) {
+    throw new Error(`${REFOCUS_PUBLISHER_ENV} must be a distinguished name starting with CN=, got ${JSON.stringify(refocusPublisher)}`)
+  }
+  if (/nous/i.test(refocusPublisher)) {
+    throw new Error(`${REFOCUS_PUBLISHER_ENV} must be a Refocus identity, never a Nous one (got ${JSON.stringify(refocusPublisher)})`)
+  }
+  if (refocusPublisher.includes("'")) {
+    throw new Error(`${REFOCUS_PUBLISHER_ENV} must not contain single quotes: the manifest template quotes the Publisher value`)
+  }
+} else {
+  // Build gate: an INSTALLABLE (signed) build must name the certificate
+  // Subject it will be signed with — only the explicitly non-installable
+  // unsigned candidates may ride the provisional publisher.
+  if (refocusSignedBuild) {
+    throw new Error(`A signed (installable) refocus build requires ${REFOCUS_PUBLISHER_ENV} set to the exact Subject of the signing certificate; without it the manifest can never match the cert and Windows refuses install and update (0x8007000B)`)
+  }
+  refocusPublisher = PROVISIONAL_REFOCUS_PUBLISHER
+}
+
 /** @typedef {import("./product-identity.d.cts")} ProductIdentity */
 
 /** @type {ProductIdentity} */
@@ -110,7 +154,14 @@ const identity = {
   artifactNamePascal: name.pascal,
   windowsExecutableName,
   cliName,
-  msixAppIdWithOrg: `NousResearch.${name.pascal}${pascalSuffix}`,
+  // MSIX namespace: the package Name and Publisher are one identity. Refocus
+  // carries its own Name segment (Refocus.*), never the official NousResearch
+  // namespace — and its Publisher through refocusPublisher above: the
+  // provisional value for unsigned candidates, the exact cert Subject for
+  // signed builds (HERMES_MSIX_PUBLISHER). The key exists on refocus only,
+  // so official identities keep their exact historical shape.
+  msixAppIdWithOrg: refocus ? `Refocus.${name.pascal}` : `NousResearch.${name.pascal}${pascalSuffix}`,
+  ...(refocus ? { msixPublisher: refocusPublisher } : {}),
   ...(store
     ? {
         storeMsix: {

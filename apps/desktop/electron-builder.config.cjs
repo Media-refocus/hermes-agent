@@ -26,7 +26,8 @@ const {
   artifactNamePascal,
   windowsExecutableName,
   channel,
-  msixAppIdWithOrg
+  msixAppIdWithOrg,
+  msixPublisher
 } = require('./product-identity.cjs')
 
 // `storeMsix` is optional on the identity type but guaranteed present when
@@ -225,13 +226,26 @@ module.exports = {
   },
   msix: {
     // A store build uses the Partner Center packaging identity (the Store
-    // re-signs + rewrites the publisher on submission); everything else uses
-    // the out-of-store ATS-cert identity.
-    identityName: store ? mustStoreMsix(storeMsixWhenStore).identityName : msixAppIdWithOrg,
+    // re-signs + rewrites the publisher on submission); refocus uses its own
+    // namespace + publisher (provisional for unsigned candidates, the exact
+    // signing-cert Subject for signed builds — enforced in
+    // product-identity.cjs); everything else uses the out-of-store
+    // ATS-cert identity.
+    // identityName: refocus's msixAppIdWithOrg already carries the Refocus.*
+    // namespace (see product-identity.cjs), so both branches share it.
+    identityName: store ? mustStoreMsix(storeMsixWhenStore).identityName
+      : msixAppIdWithOrg,
     applicationId: appNamePascal,
     displayName,
-    publisher: store ? mustStoreMsix(storeMsixWhenStore).publisher : OUT_OF_STORE_PUBLISHER,
-    publisherDisplayName: store ? mustStoreMsix(storeMsixWhenStore).publisherDisplayName : 'Nous Research',
+    // The Publisher is half the package identity and must byte-match the
+    // signing cert Subject at install (else event 150 / 0x8007000B). The
+    // official Publisher stays Nous's; refocus never wears it.
+    publisher: store ? mustStoreMsix(storeMsixWhenStore).publisher
+      : refocus ? /** @type {string} */ (msixPublisher)
+      : OUT_OF_STORE_PUBLISHER,
+    publisherDisplayName: store ? mustStoreMsix(storeMsixWhenStore).publisherDisplayName
+      : refocus ? 'Refocus'
+      : 'Nous Research',
     // The native quad is the build time (scripts/msix-shared.mjs::nativeQuad),
     // baked into the manifest template, so the builder's own build-number
     // override would stamp a second, conflicting version.
