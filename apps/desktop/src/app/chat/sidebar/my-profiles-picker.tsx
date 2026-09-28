@@ -31,9 +31,10 @@ export function MyProfilesPicker({ open, onOpenChange }: { open: boolean; onOpen
           <h3 className="mb-2 text-sm font-medium">{group.label}</h3>
           {!group.reachable && <p role="status" className="mb-2 text-sm text-amber-600">{t.profiles.gatewayOffline(group.label)}</p>}
           {group.agents.map(agent => {
-            const key = `${agent.connectionId}::${agent.profile}`
+            const servedProfile = agent.targetProfile || agent.profile
+            const key = `${agent.connectionId}::${servedProfile}`
             return <label className="flex items-center gap-2 py-1" key={key}>
-              <Checkbox checked={selected.includes(key)} onCheckedChange={checked => setMyProfileSelected({ connectionId: agent.connectionId, profile: agent.profile }, checked === true)} />
+              <Checkbox checked={selected.includes(key)} onCheckedChange={checked => setMyProfileSelected({ connectionId: agent.connectionId, profile: servedProfile }, checked === true)} />
               <span>{agent.profile}</span>
             </label>
           })}
