@@ -8,6 +8,7 @@ vi.mock('@/api/sessions', () => ({ listRouteSessionsPage, listSidebarSessions })
 
 import {
   MY_PROFILES_SELECTION_STORAGE_KEY,
+  $myProfilesGatewayErrors,
   $myProfilesIncomplete,
   $myProfilesSelection,
   invalidateMyProfilesRefresh,
@@ -250,6 +251,96 @@ describe('my-profiles recents pagination', () => {
     expect(b.incomplete).toBeUndefined()
     expect(b.sessions.map(session => session.id)).toEqual(['b0', 'b1'])
     expect(listRouteSessionsPage.mock.calls.every(([route]) => route.connectionId === 'gw-a')).toBe(true)
+    expect($myProfilesIncomplete.get()).toEqual([{ connectionId: 'gw-a', profile: 'default' }])
+  })
+
+  it('keeps rows already read when a mid-walk page fails, without an offline verdict', async () => {
+    // Page 1 of the walk succeeds, page 2 dies mid-paging. The 500 rows from
+    // the first response are real server truth: they must survive, the route
+    // must NOT be reported as gateway-offline, and the result must carry the
+    // honest «lista incompleta» warning instead.
+    listSidebarSessions.mockResolvedValue(
+      sidebarPage(Array.from({ length: 500 }, (_, i) => `s${i}`), 'default', true)
+    )
+    listRouteSessionsPage
+      .mockResolvedValueOnce({
+        sessions: Array.from({ length: 100 }, (_, i) => ({ id: `s${500 + i}`, profile: 'default' })),
+        total: 700,
+        limit: 100,
+        offset: 500
+      })
+      .mockRejectedValueOnce(new Error('gateway hiccup'))
+
+    const [result] = await loadMyProfiles({ routes: [{ connectionId: 'gw-a', profile: 'default' }], limit: 650 })
+
+    expect(result.sessions.map(session => session.id)).toEqual(
+      Array.from({ length: 600 }, (_, i) => `s${i}`)
+    )
+    expect(result.sessions.every(session => session.connection_id === 'gw-a')).toBe(true)
+    expect(result.incomplete).toBe(true)
+    expect(result.error).toBeUndefined()
+    expect($myProfilesGatewayErrors.get()).toEqual([])
+    expect($myProfilesIncomplete.get()).toEqual([{ connectionId: 'gw-a', profile: 'default' }])
+  })
+
+  it('keeps the offline verdict when the FIRST request fails with no data read', async () => {
+    // The catch-path regression guard: a first-request failure still reports
+    // the route offline (no rows, no partial walk to preserve).
+    listSidebarSessions.mockRejectedValue(new Error('offline'))
+    const [result] = await loadMyProfiles({ routes: [{ connectionId: 'gw-a', profile: 'default' }], limit: 650 })
+    expect(result).toEqual({ connectionId: 'gw-a', sessions: [], error: 'offline' })
+    expect($myProfilesGatewayErrors.get()).toEqual([
+      { connectionId: 'gw-a', profile: 'default', message: 'offline' }
+    ])
+  })
+
+  it('keeps paging full pages when total is absent, until a short page', async () => {
+    // Legacy backend: profiles_truncated says continue but pages carry no
+    // total. The old `(page.total ?? 0) <= offset` read the missing count as
+    // «exhausted» after the first page — silent truncation. The walk must
+    // keep advancing by window until the SQL window proves empty.
+    listSidebarSessions.mockResolvedValue(
+      sidebarPage(Array.from({ length: 500 }, (_, i) => `s${i}`), 'default', true)
+    )
+    const TOTAL = 800
+    listRouteSessionsPage.mockImplementation(async (_route: unknown, { offset }: { offset: number }) => {
+      const size = offset + 100 >= TOTAL ? TOTAL - offset : 100
+      return {
+        // NO total field at all.
+        sessions: Array.from({ length: size }, (_, i) => ({ id: `s${offset + i}`, profile: 'default' })),
+        limit: 100,
+        offset
+      }
+    })
+
+    const [result] = await loadMyProfiles({ routes: [{ connectionId: 'gw-a', profile: 'default' }], limit: 650 })
+
+    // Without a total, the full page at 700 cannot prove the window ended:
+    // one more request at 800 returns the short (empty) page that does.
+    expect(listRouteSessionsPage.mock.calls.map(([, opts]) => opts.offset)).toEqual([500, 600, 700, 800])
+    expect(result.sessions).toHaveLength(TOTAL)
+    expect(result.sessions.at(-1)).toMatchObject({ id: 's799' })
+    // The last page was short: exhaustive, no warning needed.
+    expect(result.incomplete).toBeUndefined()
+    expect($myProfilesIncomplete.get()).toEqual([])
+  })
+
+  it('warns «lista incompleta» when total is absent and the walk hits the bound', async () => {
+    // No total AND the bound is reached: there is no proof of exhaustiveness,
+    // so the capped list must carry the warning instead of ending silently.
+    listSidebarSessions.mockResolvedValue(
+      sidebarPage(Array.from({ length: 500 }, (_, i) => `s${i}`), 'default', true)
+    )
+    listRouteSessionsPage.mockImplementation(async (_route: unknown, { offset }: { offset: number }) => ({
+      sessions: Array.from({ length: 100 }, (_, i) => ({ id: `s${offset + i}`, profile: 'default' })),
+      limit: 100,
+      offset
+    }))
+
+    const [result] = await loadMyProfiles({ routes: [{ connectionId: 'gw-a', profile: 'default' }], limit: 650 })
+
+    expect(result.sessions.length).toBeLessThanOrEqual(2000)
+    expect(result.incomplete).toBe(true)
     expect($myProfilesIncomplete.get()).toEqual([{ connectionId: 'gw-a', profile: 'default' }])
   })
 

@@ -157,24 +157,40 @@ export async function loadMyProfiles(
         let offset = requested
 
         if (truncated) {
-          while (rows.length < MAX_ROUTES) {
-            const page = await listRouteSessionsPage(route, {
-              limit: PAGE_SIZE,
-              offset,
-              excludeSources: MY_PROFILES_RECENTS_EXCLUDE
-            })
+          // A failure PAST the first response is not a gateway outage: the
+          // rows already read are real, so keep them and warn «lista
+          // incompleta» instead of reporting the route offline. Only a failed
+          // FIRST request (no data at all) earns the offline/error path.
+          try {
+            while (rows.length < MAX_ROUTES) {
+              const page = await listRouteSessionsPage(route, {
+                limit: PAGE_SIZE,
+                offset,
+                excludeSources: MY_PROFILES_RECENTS_EXCLUDE
+              })
 
-            appendDeduped(rows, seen, page.sessions)
-            // `include_pinned` may append old pinned rows outside the
-            // requested LIMIT window. Advance by the DB window, not the
-            // response length, or each repeated pin skips an ordinary row.
-            offset += PAGE_SIZE
-            // `total` counts the SQL-scoped rows; pinned back-fill can make a
-            // short SQL page look full, so the server count is the stop guard.
-            if (page.sessions.length < PAGE_SIZE || (page.total ?? 0) <= offset) {
-              incomplete = false
-              break
+              appendDeduped(rows, seen, page.sessions)
+              // `include_pinned` may append old pinned rows outside the
+              // requested LIMIT window. Advance by the DB window, not the
+              // response length, or each repeated pin skips an ordinary row.
+              offset += PAGE_SIZE
+              // A short response proves the SQL window ran out (pins only
+              // pad): the walk is exhaustive. `total` counts the SQL-scoped
+              // rows and is the stop guard when present — but an ABSENT
+              // total (legacy backend) must read as «unknown», not as 0:
+              // keep advancing by window until a short page or the bound,
+              // or every full page silently truncates the list.
+              if (page.sessions.length < PAGE_SIZE) {
+                incomplete = false
+                break
+              }
+              if (typeof page.total === 'number' && page.total <= offset) {
+                incomplete = false
+                break
+              }
             }
+          } catch {
+            incomplete = true
           }
         }
 
