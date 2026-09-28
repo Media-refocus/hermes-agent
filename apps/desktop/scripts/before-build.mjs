@@ -88,7 +88,9 @@ function writeMsixExtensions() {
   const launchers = ['bundled', 'store', 'refocus'].includes(process.env.HERMES_DESKTOP_VARIANT || '')
     ? JSON.parse(fs.readFileSync(manifest, 'utf8')).launchers : []
   if (!Array.isArray(launchers)) throw new Error('Bundled payload has no declared launchers')
-  const nonstable = appNamePascal !== artifactNamePascal
+  // Refocus keeps the nonstable manifest shape: its identity diverges from the
+  // stock artifact even though appNamePascal now equals artifactNamePascal.
+  const nonstable = appNamePascal !== artifactNamePascal || Boolean(process.env.HERMES_DESKTOP_VARIANT === 'refocus')
   const aliases = nonstable ? '' : appExecutionAliasExtensions(launchers)
   if (nonstable) {
     const template = fs.readFileSync(path.join(desktop, 'assets/msix-manifest.xml'), 'utf8')

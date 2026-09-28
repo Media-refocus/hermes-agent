@@ -6,20 +6,24 @@
 # descriptors, no Store submission. The job's token is read-only for the
 # repository (contents: read) and can only reach the artifact store.
 #
-# Identity: HERMES_DESKTOP_VARIANT=refocus + HERMES_BUILD_COMMIT (commit
-# build). The candidate installs side-by-side with the official Hermes —
-# its own appId (com.nousresearch.hermes-refocus-<sha7>), MSIX identity
-# (NousResearch.HermesRefocusCommit<sha7>), userData folder and CLI alias
-# (hermes-refocus-<sha7>). Updates stamp `external`: the app never checks
-# a feed; new candidates are manual installs.
+# Identity: HERMES_DESKTOP_VARIANT=refocus + HERMES_BUILD_COMMIT (the commit
+# is stamped for provenance, NOT worn on the product). The candidate is the
+# one installed product 'Hermes Refocus': a stable appId
+# (com.nousresearch.hermes-refocus), MSIX identity (NousResearch.HermesRefocus),
+# display name, userData folder and CLI alias (hermes-refocus) across commits —
+# so each newer candidate updates the previous one in place. Updates are
+# stamped `external`: the app never checks a feed; new candidates are manual
+# installs of a higher-versioned MSIX (the package Version rises with the
+# build clock — verified by the version gate below).
 #
 # Signing: this build is UNSIGNED by design — no Azure Trusted Signing
 # credentials exist in this fork. The job FAILS CLOSED if signing vars are
 # unexpectedly present (wrong trust anchor) and again if the packaged MSIX
-# turns out signed. The summary says plainly that the unsigned MSIX is NOT
-# installable by normal double-click: sideloading requires Developer Mode
-# and Windows will flag the untrusted publisher. Installing it is an
-# explicit, manual decision.
+# turns out signed. Installing an unsigned MSIX is possible only via
+# `Add-AppxPackage -AllowUnsigned` (Windows 11, elevated PowerShell, and the
+# package manifest must carry the special unsigned-package OID publisher);
+# plain `Add-AppxPackage` fails with 0x800B0100 (TRUST_E_NOSIGNATURE) on every
+# Windows version. See the job summary's install honesty section.
 #
 # Untested: this workflow has never run on a Windows runner (no dispatch
 # was performed from this session). The first dispatch is the real test.
@@ -124,13 +128,13 @@ jobs:
           set -euo pipefail
           python scripts/bundles/desktop.py --prepared "$RUNNER_TEMP/desktop-job/prepared.json" --variant refocus
 
-      - name: Verify the candidate identity (fail closed on official markers)
+      - name: Verify the candidate identity and package version (fail closed)
         shell: bash
         run: |
           set -euo pipefail
           node apps/desktop/scripts/refocus-verify-candidate.mjs "$BUILD_SHA"
 
-      - name: Verify the unsigned MSIX is present and honestly named
+      - name: Verify the unsigned MSIX, its identity and rising version
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -150,6 +154,23 @@ jobs:
             exit 1
           }
           Write-Output "Confirmed UNSIGNED (as designed — see the workflow header before installing)."
+          # The in-place update contract: stable identity Name, Version that
+          # rises with the build clock (never 0.0.0.0 — that would make every
+          # future update a downgrade Windows would refuse).
+          $null = New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/msix-inspect"
+          Copy-Item $msix.FullName "$env:RUNNER_TEMP/msix-inspect/candidate.zip"
+          Expand-Archive "$env:RUNNER_TEMP/msix-inspect/candidate.zip" "$env:RUNNER_TEMP/msix-inspect/x"
+          [xml]$manifest = Get-Content "$env:RUNNER_TEMP/msix-inspect/x/AppxManifest.xml"
+          $identity = $manifest.Package.Identity
+          if ($identity.Name -ne 'NousResearch.HermesRefocus') {
+            Write-Output "::error::MSIX identity Name is $($identity.Name), expected the stable NousResearch.HermesRefocus"
+            exit 1
+          }
+          if ($identity.Version -eq '0.0.0.0') {
+            Write-Output "::error::MSIX Version is 0.0.0.0 — the version gate did not run; in-place updates would be refused"
+            exit 1
+          }
+          Write-Output "identity: $($identity.Name) $($identity.Version)"
 
       - name: Upload the private candidate artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -168,22 +189,30 @@ jobs:
             echo "| fact | value |"
             echo "|---|---|"
             echo "| commit | \`${BUILD_SHA}\` |"
-            echo "| variant | \`refocus\` (commit build) |"
+            echo "| variant | \`refocus\` (commit-stamped, product-stable) |"
             echo "| candidate | \`${CANDIDATE_NAME}\` |"
             echo "| signed | **no** — no ATS certificate exists for this fork |"
             echo "| published | **nothing** — artifact of this run only |"
             echo ""
             echo "### Install honesty"
-            echo "- This MSIX is **not double-click installable** as a trusted app:"
-            echo "  Windows requires an authorized signature for normal installs."
-            echo "- Sideload path (manual, at your own risk): enable Developer Mode /"
-            echo "  sideloading, then \`Add-AppxPackage -Path <candidate>\`. Windows will"
-            echo "  flag the untrusted publisher."
-            echo "- The candidate installs side-by-side with the official Hermes:"
-            echo "  its own appId, MSIX identity, userData folder and CLI alias"
-            echo "  (\`hermes-refocus-${BUILD_SHA:0:7}\`). No shared update feed."
-            echo "- Updates: none. The stamp says \`external\`; fetch a new candidate"
-            echo "  build manually when the branch moves."
+            echo "- A plain \`Add-AppxPackage -Path <candidate>\` **fails** on this"
+            echo "  package with 0x800B0100 (TRUST_E_NOSIGNATURE) on every Windows"
+            echo "  version — unsigned packages cannot install that way."
+            echo "- The only unsigned path is \`Add-AppxPackage -AllowUnsigned\`:"
+            echo "  Windows 11 only, elevated PowerShell, AND the package manifest"
+            echo "  must carry the special unsigned-package OID publisher (per"
+            echo "  Microsoft's unsigned-package docs). This candidate's manifest"
+            echo "  does NOT carry that OID, so at this time there is **no**"
+            echo "  supported install path — the candidate is for build/artifact"
+            echo "  verification only. (An OID-publisher candidate build is a"
+            echo "  possible follow-up, still fully unsigned.)"
+            echo "- The installed product is stable across commits: one name"
+            echo "  ('Hermes Refocus'), one MSIX identity"
+            echo "  (NousResearch.HermesRefocus), one userData folder and one CLI"
+            echo "  alias (\`hermes-refocus\`). A newer candidate updates the"
+            echo "  previous one in place (higher package Version, same Name)."
+            echo "- No shared update feed with the official Hermes; updates are"
+            echo  " stamped \`external\` — never auto-checked."
             echo ""
             echo "### What was NOT tested"
             echo "- This workflow has never executed on a Windows runner."

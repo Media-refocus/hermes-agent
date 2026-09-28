@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -79,7 +80,20 @@ def _build_prepared(prepared, builder_args: list[str], variant: str | None) -> N
     targets = {"win32": ["--win", "msix"], "darwin": ["--mac", "dmg", "zip"], "linux": ["--linux", "AppImage"]}[sys.platform]
     package_args = ["--prepared", str(prepared.packager), "--native-deps", str(prepared.native),
                     *targets, f"-c.extraMetadata.version={request.version}"]
-    run([node, "scripts/run-electron-builder.mjs", "--validate-only", *package_args, *builder_args],
+    version_args = []
+    if sys.platform == "win32" and variant == "refocus":
+        # MSIX in-place update requires the SAME package Name with a STRICTLY
+        # HIGHER Version. Refocus has one Name across commits by design, so the
+        # quad must come from the build clock (yy.mmdd.hh.mmss, 16-bit fields,
+        # monotonic — the canary shape). Without it the custom manifest pins
+        # 0.0.0.0 (pyproject version) and Windows refuses every update.
+        # HERMES_RELEASE_EPOCH pins the clock when a caller needs determinism.
+        epoch = int(os.environ.get("HERMES_RELEASE_EPOCH") or time.time())
+        script = "const m=require('./scripts/msix-shared.mjs');console.log(m.canaryPackageVersionAt(Number(process.argv[1])))"
+        quad = capture([node, "-e", script, str(epoch)], repo).strip()
+        version_args = [f"-c.extraMetadata.version={quad}", f"-c.extraMetadata.shortVersion={quad}",
+                        f"-c.extraMetadata.shortVersionWindows={quad}"]
+    run([node, "scripts/run-electron-builder.mjs", "--validate-only", *package_args, *version_args, *builder_args],
         cwd=desktop, env=env)
     run([node, "scripts/build/node-deps.mjs", "--source", str(repo), "--reuse", "--no-install",
          "--native-toolchain", prepared.native_toolchain,
@@ -103,7 +117,8 @@ def _build_prepared(prepared, builder_args: list[str], variant: str | None) -> N
     run([node, "scripts/build/desktop.mjs", "--source", str(repo), "--icons", str(icons),
          "--stamp", str(desktop / "build/install-stamp.json"), "--native-deps", str(prepared.native),
          "--out", str(desktop / "dist")], cwd=repo, env=env)
-    version_args = []
+    # version_args comes from the package_args block above; the tagged branch
+    # below refines it. Tagged and refocus builds are mutually exclusive.
     if sys.platform == "win32" and request.channel_request is None and request.tag is not None:
         script = "const m=require('./scripts/msix-shared.mjs');console.log(m.nativeQuad(process.argv[1], Number(process.env.HERMES_RELEASE_EPOCH)))"
         quad = capture([node, "-e", script, request.tag], repo).strip()

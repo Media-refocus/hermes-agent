@@ -47,29 +47,51 @@ const name = variants[store ? 'bundled' : (variant || '')]
 // never overwrite the stable feed file, and vice versa.
 const canary = /\+canary\.20\d{6}T\d{6}Z$/.test(process.env.HERMES_PAYLOAD_TAG || '')
 
-// 'refocus' is a private side-by-side build identity: the full bundled
-// packaging (agent payload, MSIX, own appId family) but never a release
-// feed, never the Store, and never the official package family.
+// 'refocus' is the INSTALLED private product 'Hermes Refocus': full bundled
+// packaging (agent payload, MSIX) but never a release feed, never the Store,
+// and never the official package family. Unlike official commit builds, its
+// identity is commit-INDEPENDENT (see below).
 const refocus = variant === 'refocus'
 
 // Nonstable installs own their package family and local desktop state. The
 // seven-character commit suffix also names the CLI and fits MSIX's name cap.
 const buildCommitEnv = process.env.HERMES_BUILD_COMMIT || ''
 const buildCommit = /^[a-f0-9]{40}$/.test(buildCommitEnv) ? buildCommitEnv.slice(0, 7) : null
-const displayName = buildCommit
-  ? `${name.display} ${buildCommit}`
-  : canary
-    ? `${name.display} Canary`
-    : name.display
 
-const kebabSuffix = buildCommit ? `-${buildCommit}` : canary ? '-canary' : ''
-const pascalSuffix = buildCommit ? `Commit${buildCommit}` : canary ? 'Canary' : ''
+// Official commit builds (bundled/light) carry the commit suffix on every OS
+// marker: each commit is its own throwaway side-by-side product. Refocus is
+// the opposite trade: it is the *installed product* and must update in place,
+// and MSIX refuses an in-place update when the package Name changes. So its
+// markers are byte-identical across commits; the commit lives in the install
+// stamp (HERMES_BUILD_COMMIT is still required by the build), never in the
+// product identity. userData follows appNamePascal (see
+// electron/product-identity.ts) and stays stable for the same reason.
+const displayName = refocus
+  ? name.display
+  : buildCommit
+    ? `${name.display} ${buildCommit}`
+    : canary
+      ? `${name.display} Canary`
+      : name.display
+
+const kebabSuffix = refocus ? '' : buildCommit ? `-${buildCommit}` : canary ? '-canary' : ''
+const pascalSuffix = refocus ? '' : buildCommit ? `Commit${buildCommit}` : canary ? 'Canary' : ''
 const cliName = `${light || refocus ? name.kebab : 'hermes'}${kebabSuffix}`
+// The exe stem must be a valid Windows filename; the display name alone
+// qualifies only when it carries no spaces (commit-suffixed names do).
+const windowsExecutableName = kebabSuffix || light
+  ? cliName
+  : refocus
+    ? name.kebab
+    : displayName
 if (store && (canary || buildCommit)) {
   throw new Error('Store packaging is only eligible for stable releases')
 }
 if (refocus && (canary || process.env.HERMES_PAYLOAD_TAG)) {
   throw new Error('Refocus builds are commit builds; a release tag would claim the release namespace')
+}
+if (refocus && !buildCommitEnv) {
+  throw new Error('Refocus builds require HERMES_BUILD_COMMIT (the commit is stamped, not worn)')
 }
 
 /** @typedef {import("./product-identity.d.cts")} ProductIdentity */
@@ -86,7 +108,7 @@ const identity = {
   channel: store || buildCommit || refocus ? null : light ? (canary ? 'light-canary' : 'light') : (canary ? 'canary' : 'latest'),
   appNamePascal: `${name.pascal}${pascalSuffix}`,
   artifactNamePascal: name.pascal,
-  windowsExecutableName: kebabSuffix ? cliName : displayName,
+  windowsExecutableName,
   cliName,
   msixAppIdWithOrg: `NousResearch.${name.pascal}${pascalSuffix}`,
   ...(store

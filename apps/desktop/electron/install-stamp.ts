@@ -95,6 +95,9 @@ export interface InstallStamp {
   receiverProtocol?: 1
   /** Pinned release tag; null for channel builds, one-offs and bootstrap. */
   tag: string | null
+  /** Private product override (refocus). Payload='bundled' alone would
+   * otherwise resolve the runtime to the OFFICIAL bundled identity. */
+  variant?: 'refocus'
 }
 
 declare const __HERMES_INSTALL_STAMP__: InstallStamp

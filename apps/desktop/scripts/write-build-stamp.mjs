@@ -270,6 +270,11 @@ export function buildStampPayload(stamp, env = process.env, platform = process.p
 
     updateMechanism: commitBuild ? 'external' : updateMechanism,
     tag: channelBuild?.receiverCandidate ? channelBuild.releaseTag : env.HERMES_PAYLOAD_TAG || null,
+    // Refocus only: the installed product is 'Hermes Refocus' regardless of
+    // commit, so the runtime must derive its identity from this explicit
+    // variant flag (payload='bundled' would otherwise resolve to the OFFICIAL
+    // bundled identity and share its userData). See bundle-electron-main.mjs.
+    ...(variant === 'refocus' ? { variant: 'refocus' } : {}),
     ...(bundleEnv ? { bundleEnv } : {}),
     ...(bundled ? { runtime: payload.runtime } : {})
   }

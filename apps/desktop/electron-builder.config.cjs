@@ -103,7 +103,7 @@ module.exports = {
     name: appNamePascal,
     // Electron bootstrap reads package.productName before main.ts. Keep the
     // shipped stable default, but isolate nonstable userData from first access.
-    ...(channelRequest || appNamePascal !== artifactNamePascal ? { productName: displayName } : {}),
+    ...(channelRequest || refocus || appNamePascal !== artifactNamePascal ? { productName: displayName } : {}),
     desktopName: appId
   },
   // A refocus build must never publish anywhere, even if a feed var leaks in.
@@ -251,7 +251,7 @@ module.exports = {
     // time, so typecheck/test imports don't touch the filesystem.
     customExtensionsPath: 'build/msix-extensions.xml',
     customManifestPath: store ? 'build/store-msix-manifest.xml'
-      : releaseBuild || channelRequest || appNamePascal !== artifactNamePascal
+      : releaseBuild || channelRequest || refocus || appNamePascal !== artifactNamePascal
         ? 'build/msix-manifest.xml' : 'assets/msix-manifest.xml',
     // Hermes state is deliberately shared with unpackaged CLI/gateway
     // processes. Pair the manifest's disabled virtualization properties with

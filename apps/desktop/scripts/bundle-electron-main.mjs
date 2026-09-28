@@ -12,7 +12,11 @@ const repoRoot = resolve(import.meta.dirname, '../../..')
 // Evaluate the one identity module in a fresh process. Its CJS cache and the
 // caller's environment must not carry a previous variant into this artifact.
 function productIdentity(source, stamp) {
-  const variant = stamp.updateMechanism === 'microsoft-store' ? 'store'
+  // The refocus stamp carries its variant explicitly: payload='bundled' alone
+  // would silently resolve the OFFICIAL bundled identity (shared userData).
+  // Official flavors keep the payload-keyed derivation.
+  const variant = stamp.variant === 'refocus' ? 'refocus'
+    : stamp.updateMechanism === 'microsoft-store' ? 'store'
     : stamp.payload === 'bootstrap' ? '' : stamp.payload
   if (!['', 'bundled', 'light', 'store', 'refocus'].includes(variant)) {
     throw new Error(`Invalid desktop stamp payload: ${stamp.payload}`)
@@ -20,9 +24,11 @@ function productIdentity(source, stamp) {
   return execFileSync(process.execPath, ['-e', 'console.log(JSON.stringify(require(process.argv[1])))',
     join(source, 'apps/desktop/product-identity.cjs')], {
     env: { ...process.env, HERMES_DESKTOP_VARIANT: variant, HERMES_PAYLOAD_TAG: stamp.tag || '',
-      // Commit builds stamp source='commit-build'; the display name carries
-      // the short SHA (see product-identity.cjs). Tagged builds pass ''.
-      HERMES_BUILD_COMMIT: stamp.source === 'commit-build' ? (stamp.commit || '') : '' },
+      // The commit is required for refocus (the identity module throws without
+      // it) but is NOT part of its product identity: the installed product
+      // keeps one name/userData/package across commits.
+      HERMES_BUILD_COMMIT: stamp.source === 'commit-build' || stamp.variant === 'refocus'
+        ? (stamp.commit || '') : '' },
     encoding: 'utf8',
   }).trim()
 }
