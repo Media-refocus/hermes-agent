@@ -419,17 +419,31 @@ export function setSessionArchived(
 // sweep (which runs backend-side, blind to Desktop localStorage) never hides a
 // pinned chat. Best-effort: the sidebar stays localStorage-driven for its own
 // display; this only feeds the backend policy.
-export function setSessionPinnedRemote(id: string, pinned: boolean, profile?: string | null): Promise<{ ok: boolean }> {
+export function setSessionPinnedRemote(
+  id: string,
+  pinned: boolean,
+  profile?: string | null | { connectionId: string; profile: string }
+): Promise<{ ok: boolean }> {
   // Owning profile in the PATCH body (see setSessionArchived / renameSession):
   // the handler reads its target DB from body.profile, so a remote/foreign
   // profile's pin must travel in the body or it no-ops on the wrong state.db.
-  const owner = sessionWriteProfile(profile)
+  // An OBJECT owner also pins the request to that registry connection — two
+  // gateways can expose the same profile name, and a bare profile would PATCH
+  // whichever one is ambient.
+  const isOwnerRoute = Boolean(profile && typeof profile === 'object')
+
+  const ownerProfile = isOwnerRoute
+    ? (profile as { connectionId: string; profile: string }).profile
+    : sessionWriteProfile(profile as string | null | undefined)
+
+  const connectionId = isOwnerRoute ? (profile as { connectionId: string; profile: string }).connectionId : undefined
 
   return hermesApi<{ ok: boolean }>({
-    ...(owner ? { profile: owner } : {}),
+    ...(connectionId ? { connectionId } : {}),
+    ...(ownerProfile ? { profile: ownerProfile } : {}),
     path: `/api/sessions/${encodeURIComponent(id)}`,
     method: 'PATCH',
-    body: { pinned, ...(owner ? { profile: owner } : {}) }
+    body: { pinned, ...(ownerProfile ? { profile: ownerProfile } : {}) }
   })
 }
 
@@ -437,18 +451,31 @@ export function setSessionPinnedRemote(id: string, pinned: boolean, profile?: st
 // (sessions.last_read_at via SessionDB.set_session_read). Same profile
 // routing as the other session mutations: a remote session's row lives only
 // on its remote host, so the owning profile must travel with the request.
-export function setSessionUnreadRemote(id: string, unread: boolean, profile?: string | null): Promise<{ ok: boolean }> {
+export function setSessionUnreadRemote(
+  id: string,
+  unread: boolean,
+  profile?: string | null | { connectionId: string; profile: string }
+): Promise<{ ok: boolean }> {
   // Owning profile in the PATCH body (see setSessionArchived / renameSession):
   // the handler reads its target DB from body.profile, so a remote/foreign
   // profile's unread toggle must travel in the body or it no-ops on the wrong
-  // state.db.
-  const owner = sessionWriteProfile(profile)
+  // state.db. An OBJECT owner also pins the request to that registry
+  // connection — two gateways can expose the same profile name, and a bare
+  // profile would PATCH whichever one is ambient.
+  const isOwnerRoute = Boolean(profile && typeof profile === 'object')
+
+  const ownerProfile = isOwnerRoute
+    ? (profile as { connectionId: string; profile: string }).profile
+    : sessionWriteProfile(profile as string | null | undefined)
+
+  const connectionId = isOwnerRoute ? (profile as { connectionId: string; profile: string }).connectionId : undefined
 
   return hermesApi<{ ok: boolean }>({
-    ...(owner ? { profile: owner } : {}),
+    ...(connectionId ? { connectionId } : {}),
+    ...(ownerProfile ? { profile: ownerProfile } : {}),
     path: `/api/sessions/${encodeURIComponent(id)}`,
     method: 'PATCH',
-    body: { unread, ...(owner ? { profile: owner } : {}) }
+    body: { unread, ...(ownerProfile ? { profile: ownerProfile } : {}) }
   })
 }
 

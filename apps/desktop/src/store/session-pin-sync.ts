@@ -27,7 +27,7 @@ import { setSessionPinnedRemote } from '@/hermes'
 import { onConnectionScopeChange } from '@/lib/connection-scoped'
 import { $pinnedSessionIds, pinSession, unpinSession } from '@/store/layout'
 import { $activeGatewayProfile, normalizeProfileKey } from '@/store/profile'
-import { $cronSessions, $messagingSessions, $sessions, sessionMatchesStoredId, sessionPinId } from '@/store/session'
+import { $cronSessions, $messagingSessions, $sessions, sessionPinId } from '@/store/session'
 import type { SessionInfo } from '@/types/hermes'
 
 // pin ids we've successfully PATCHed pinned=true this session.
@@ -79,16 +79,28 @@ function loadedSessionRows(): SessionInfo[] {
 }
 
 /**
- * The row a stored pin id resolves to, across every slice. Same tie-break as
- * `rowsByPinId`: when two profiles share the id, the write must target the
- * row the pull adopted — the active gateway's — or an unpin PATCHes the other
- * profile and the next page re-adopts the pin.
+ * The row a stored pin id resolves to, across every slice. When two profiles
+ * share the id, the write must target a row the pull actually adopted — the
+ * active gateway's when it is among them, else the first seen.
  */
 function loadedRowFor(pinId: string): SessionInfo | undefined {
-  const rows = loadedSessionRows().filter(row => sessionMatchesStoredId(row, pinId))
-  const gateway = normalizeProfileKey($activeGatewayProfile.get())
+  return rowsByPinId(loadedSessionRows()).get(pinId)
+}
 
-  return rows.find(row => normalizeProfileKey(row.profile) === gateway) ?? rows[0]
+/**
+ * The EXACT route a pin's PATCH must travel: the resolved row's
+ * (connectionId, profile). A bare profile is not enough — two registered
+ * gateways can expose the same profile name, and routing by name alone
+ * PATCHes whichever one is ambient, leaving the real owner's flag stale (so
+ * its auto-archive sweep hides a pinned chat). Only a connection-tagged row
+ * yields a route; untagged rows keep the legacy profile-only path.
+ */
+export function pinRouteFor(pinId: string): null | { connectionId: string; profile: string } {
+  const row = loadedRowFor(pinId)
+  const connectionId = (row?.connection_id ?? '').trim()
+  const profile = row?.profile?.trim()
+
+  return connectionId && profile ? { connectionId, profile } : null
 }
 
 /**
@@ -124,11 +136,17 @@ function rowsByPinId(rows: readonly SessionInfo[]): Map<string, SessionInfo> {
   return byId
 }
 
-/** PATCH the flag, guarding reads against pages that predate the write. */
-function writePin(id: string, pinned: boolean, profile?: null | string): Promise<void> {
+/** PATCH the flag, guarding reads against pages that predate the write.
+ *  `route` — when the owning row is connection-tagged — pins the request to
+ *  the exact gateway; a bare profile would ride the ambient socket. */
+function writePin(
+  id: string,
+  pinned: boolean,
+  route?: null | { connectionId: string; profile: string }
+): Promise<void> {
   unconfirmed.set(id, { at: Date.now(), value: pinned })
 
-  return setSessionPinnedRemote(id, pinned, profile).then(
+  return setSessionPinnedRemote(id, pinned, route ?? profileFor(id)).then(
     () => {
       // Deliberately NOT cleared here: a list request issued before this PATCH
       // can still land after the ack carrying the pre-write value. The guard
@@ -252,7 +270,7 @@ function reconcileInner(): void {
     if (!current.has(id)) {
       mirrored.delete(id)
       pending.delete(id)
-      void writePin(id, false, profileFor(id)).catch(() => {})
+      void writePin(id, false, pinRouteFor(id)).catch(() => {})
     }
   }
 
@@ -274,7 +292,7 @@ function reconcileInner(): void {
 
     pending.delete(id)
     mirrored.add(id)
-    void writePin(id, true, row.profile).catch(() => {
+    void writePin(id, true, pinRouteFor(id)).catch(() => {
       // Let a later reconcile retry the mirror.
       mirrored.delete(id)
       pending.add(id)

@@ -1,6 +1,7 @@
 import { atom } from 'nanostores'
 
 import type { SidebarProjectTree } from '@/app/chat/sidebar/projects/workspace-groups'
+import { NO_PROJECT_ID } from '@/app/chat/sidebar/projects/workspace-groups'
 import type { SessionInfo } from '@/types/hermes'
 
 import { $myProfilesSelection, type MyProfileRoute } from './my-profiles'
@@ -22,17 +23,18 @@ export const $myProfilesProjectTreeGatewayErrors = atom<Array<{ connectionId: st
 
 /** The backend's synthetic Home bucket id (`NO_PROJECT_ID`). */
 const NO_PROJECT = '__no_project__'
-
 /** Home inside ONE route's namespaced slice. */
 export const routeHomeId = (route: MyProfileRoute): string => `${route.connectionId}::${NO_PROJECT}`
 
 /**
- * Shared Home key across routes. Home means "no project claimed this chat" — the
- * same synthetic bucket on every backend — so one group renders instead of one
- * per gateway. Ownership stays exact: every session under the merged Home keeps
- * its own connection_id + profile.
+ * Shared Home id across routes — the backend's own `NO_PROJECT_ID`. Home means
+ * "no project claimed this chat" — the same synthetic bucket on every backend —
+ * so one group renders instead of one per gateway, and the row-level filter
+ * rule (`sessionBucketId` files detached rows under `NO_PROJECT_ID`) matches
+ * it. Ownership stays exact: every session under the merged Home keeps its own
+ * connection_id + profile.
  */
-export const MY_PROFILES_HOME_KEY = '__my_profiles_home__'
+export const MY_PROFILES_HOME_KEY = NO_PROJECT_ID
 
 export interface MyProfilesRouteProject {
   id: string
@@ -194,7 +196,14 @@ export function projectOwnerRoute(id: string): MyProfileRoute | null {
 
 /** Fold namespaced route trees into ONE overview list. Same project id on two
  *  gateways stays two rows; the routes' Home rows fold into one bucket (Home is
- *  "no project", not a host's project) that leads the list. */
+ *  "no project", not a host's project) that leads the list.
+ *
+ *  The merged Home keeps the backend's `NO_PROJECT_ID`, NOT a merged-specific
+ *  key: the one row-level filter rule (`sessionMatchesProjectFilter`) files
+ *  detached rows under `NO_PROJECT_ID` via `sessionBucketId`, so a Home under
+ *  any other id filters to nothing — selecting Home emptied the sidebar. The
+ *  merged node is still recognisable by its `isNoProject` flag (and leads the
+ *  list, as the single-backend tree's Home does). */
 export function mergeMyProfilesProjectTrees(routeTrees: SidebarProjectTree[][]): SidebarProjectTree[] {
   const ordered: SidebarProjectTree[] = []
   const seen = new Set<string>()
@@ -206,7 +215,7 @@ export function mergeMyProfilesProjectTrees(routeTrees: SidebarProjectTree[][]):
         const current = homes[0]
 
         if (!current) {
-          homes[0] = { ...project, id: MY_PROFILES_HOME_KEY }
+          homes[0] = { ...project, id: NO_PROJECT_ID }
         } else {
           homes[0] = {
             ...current,
@@ -254,17 +263,22 @@ export function setMyProfilesProjectTreeGatewayErrors(
 
 const REQUEST_TIMEOUT_MS = 60_000
 
-async function fetchRouteTree(route: MyProfileRoute): Promise<SidebarProjectTree[]> {
+/** The raw wire payload for one route's project tree (namespacing happens in
+ *  `namespaceMyProfilesProjectTree`; `errors[]` is inspected by the loader). */
+async function listTreePayload(route: MyProfileRoute): Promise<Record<string, unknown>> {
   const { listSidebarSessionsProjectTree } = await import('@/api/sessions')
 
-  return listSidebarSessionsProjectTree(route, {
+  const payload = await listSidebarSessionsProjectTree(route, {
     previewLimit: MY_PROFILES_PROJECT_TREE_PREVIEW_LIMIT,
     timeoutMs: REQUEST_TIMEOUT_MS
-  }).then(payload => namespaceMyProfilesProjectTree(route, payload as MyProfilesTreePayload))
+  })
+
+  return (payload ?? {}) as unknown as Record<string, unknown>
 }
 
 export async function loadMyProfilesProjectTreeForRoutes(
-  routes: readonly MyProfileRoute[]
+  routes: readonly MyProfileRoute[],
+  fetchRouteTree: (route: MyProfileRoute) => Promise<Record<string, unknown>> = listTreePayload
 ): Promise<{ projects: SidebarProjectTree[]; errors: Array<{ connectionId: string; message: string }> } | null> {
   const generation = ++myProfilesProjectTreeGeneration
 
@@ -280,7 +294,23 @@ export async function loadMyProfilesProjectTreeForRoutes(
   const settled = await Promise.all(
     routes.map(async route => {
       try {
-        return { route, tree: await fetchRouteTree(route), error: null as string | null }
+        const payload = await fetchRouteTree(route)
+
+        // Per-profile read failures the backend could still answer for the
+        // OTHER profiles on this gateway (`errors[]`, e.g. a locked or corrupt
+        // state.db): a successful HTTP response can still be a degraded one.
+        // The sidebar's banner keys on connectionId, so any profile-level
+        // error degrades that gateway visibly — never silently.
+        const payloadErrors = (payload as { errors?: Array<{ profile?: string; error?: string }> }).errors ?? []
+        const payloadMessage = payloadErrors
+          .map(entry => `${entry.profile || 'profile'}: ${entry.error || 'read failed'}`)
+          .join('; ')
+
+        return {
+          route,
+          tree: namespaceMyProfilesProjectTree(route, payload as MyProfilesTreePayload),
+          error: payloadMessage || null
+        }
       } catch (error) {
         return {
           route,

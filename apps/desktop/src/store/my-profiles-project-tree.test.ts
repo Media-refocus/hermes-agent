@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { NO_PROJECT_ID } from '@/app/chat/sidebar/projects/workspace-groups'
 import type { MyProfileRoute } from './my-profiles'
 import {
   $myProfilesProjectTree,
@@ -16,12 +17,7 @@ import {
   setMyProfilesProjectTreeGatewayErrors
 } from './my-profiles-project-tree'
 
-vi.mock('@/api/sessions', () => ({
-  listSidebarSessionsProjectTree: vi.fn()
-}))
-
-const { listSidebarSessionsProjectTree } = await import('@/api/sessions')
-const fetchTree = vi.mocked(listSidebarSessionsProjectTree)
+const fetchTree = vi.fn<(route: MyProfileRoute) => Promise<Record<string, unknown>>>()
 
 const routeA: MyProfileRoute = { connectionId: 'gw-a', profile: 'default' }
 const routeB: MyProfileRoute = { connectionId: 'gw-b', profile: 'default' }
@@ -130,6 +126,26 @@ describe('merging two gateways with the SAME project id', () => {
     // Home leads the overview, like the single-backend tree.
     expect(merged[0].id).toBe(MY_PROFILES_HOME_KEY)
   })
+
+  it('keeps the merged Home on NO_PROJECT_ID so the project filter reaches its rows', () => {
+    // Regression: the merged Home used a distinct key (`__my_profiles_home__`),
+    // but the one row-level filter rule files detached rows under
+    // `NO_PROJECT_ID` (sessionBucketId) — so selecting Home in the filter menu
+    // matched nothing and emptied the sidebar. The merged bucket must live on
+    // the SAME id the filter rule uses; `isNoProject` keeps it identifiable.
+    const treeA = namespaceMyProfilesProjectTree(routeA, {
+      projects: [homeProject([row('h1', 'gw-a')])]
+    })
+    const treeB = namespaceMyProfilesProjectTree(routeB, {
+      projects: [homeProject([row('h2', 'gw-b')])]
+    })
+
+    const merged = mergeMyProfilesProjectTrees([treeA, treeB])
+    const home = merged.find(project => project.isNoProject)
+
+    expect(home?.id).toBe(NO_PROJECT_ID)
+    expect(home?.previewSessions).toHaveLength(2)
+  })
 })
 
 describe('refresh lifecycle', () => {
@@ -140,7 +156,7 @@ describe('refresh lifecycle', () => {
         : { projects: [backendProject('p_a', '/a', [])] }
     )
 
-    const result = await loadMyProfilesProjectTreeForRoutes([routeA, routeB])
+    const result = await loadMyProfilesProjectTreeForRoutes([routeA, routeB], fetchTree)
 
     expect(result).not.toBeNull()
     expect(result?.projects.map(project => project.id)).toEqual(['gw-a::p_a'])
@@ -148,6 +164,30 @@ describe('refresh lifecycle', () => {
     expect(result?.errors).toHaveLength(1)
     expect(result?.errors[0].connectionId).toBe('gw-b')
     expect($myProfilesProjectTreeGatewayErrors.get()).toEqual(result?.errors)
+  })
+
+  it('surfaces per-profile errors[] from a successful tree payload as a degraded gateway', async () => {
+    // The backend answered, but one profile's state.db failed to read. A
+    // silent partial tree would look like "this gateway has no sessions".
+    fetchTree.mockImplementation(async route =>
+      route.connectionId === 'gw-b'
+        ? {
+            errors: [{ error: 'database disk image is malformed', profile: 'worker' }],
+            projects: []
+          }
+        : { projects: [backendProject('p_a', '/a', [])] }
+    )
+
+    const result = await loadMyProfilesProjectTreeForRoutes([routeA, routeB], fetchTree)
+
+    expect(result).not.toBeNull()
+    // A's project still publishes.
+    expect(result?.projects.map(project => project.id)).toEqual(['gw-a::p_a'])
+    // And B is visibly degraded even though its HTTP call succeeded.
+    expect(result?.errors).toHaveLength(1)
+    expect(result?.errors[0].connectionId).toBe('gw-b')
+    expect(result?.errors[0].message).toContain('worker')
+    expect(result?.errors[0].message).toContain('database disk image is malformed')
   })
 
   it('discards a superseded refresh so a late answer never paints a left scope', async () => {
@@ -162,8 +202,8 @@ describe('refresh lifecycle', () => {
       return Promise.resolve({ projects: [] as MyProfilesRouteProject[] })
     })
 
-    const old = loadMyProfilesProjectTreeForRoutes([routeA])
-    const newer = loadMyProfilesProjectTreeForRoutes([routeB])
+    const old = loadMyProfilesProjectTreeForRoutes([routeA], fetchTree)
+    const newer = loadMyProfilesProjectTreeForRoutes([routeB], fetchTree)
     const newResult = await newer
 
     resolveOld({ projects: [backendProject('p_old', '/old', [])] })
@@ -176,7 +216,7 @@ describe('refresh lifecycle', () => {
   })
 
   it('publishes an empty tree and no errors when no route is selected', async () => {
-    const result = await loadMyProfilesProjectTreeForRoutes([])
+    const result = await loadMyProfilesProjectTreeForRoutes([], fetchTree)
 
     expect(result).toBeNull()
     expect($myProfilesProjectTree.get()).toEqual([])

@@ -197,6 +197,32 @@ describe('setSessionPinnedRemote / setSessionUnreadRemote profile scoping', () =
       body: { pinned: false, profile: 'beta' }
     })
   })
+
+  it('pins a same-named profile on gateway B to gateway B, not the ambient connection (object owner)', async () => {
+    // «Mis perfiles»: gw-a and gw-b both expose `default`; the ambient
+    // connection is gw-a but the pinned row lives on gw-b. A bare profile
+    // would PATCH gw-a's state.db and leave the real owner's pin stale (its
+    // auto-archive sweep would then hide the chat).
+    hermesApi.mockResolvedValue({ ok: true } as never)
+    vi.mocked(client.getApiRequestProfile).mockReturnValue('default')
+
+    const owner = { connectionId: 'gw-b', profile: 'default' }
+    await setSessionPinnedRemote('sess-shared', true, owner)
+    await setSessionUnreadRemote('sess-shared', true, owner)
+
+    expect(hermesApi.mock.calls[0][0]).toMatchObject({
+      method: 'PATCH',
+      connectionId: 'gw-b',
+      profile: 'default',
+      body: { pinned: true, profile: 'default' }
+    })
+    expect(hermesApi.mock.calls[1][0]).toMatchObject({
+      method: 'PATCH',
+      connectionId: 'gw-b',
+      profile: 'default',
+      body: { unread: true, profile: 'default' }
+    })
+  })
 })
 
 describe('listSidebarSessions remote ownership', () => {

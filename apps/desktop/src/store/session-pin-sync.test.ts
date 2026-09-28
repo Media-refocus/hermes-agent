@@ -2,15 +2,21 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import type { SessionInfo } from '@/types/hermes'
 
-const patch = vi.fn<(id: string, pinned: boolean, profile?: null | string) => Promise<{ ok: boolean }>>(() =>
-  Promise.resolve({ ok: true })
-)
+const patch = vi.fn<
+  (id: string, pinned: boolean, profile?: null | string | { connectionId: string; profile: string }) => Promise<{
+    ok: boolean
+  }>
+>(() => Promise.resolve({ ok: true }))
 
 vi.mock('@/hermes', () => ({
   // The layout store reaches the profile store, which sets the request profile
   // at import time; this suite only cares about the pin call.
   setApiRequestProfile: () => {},
-  setSessionPinnedRemote: (id: string, pinned: boolean, profile?: null | string) => patch(id, pinned, profile)
+  setSessionPinnedRemote: (
+    id: string,
+    pinned: boolean,
+    profile?: null | string | { connectionId: string; profile: string }
+  ) => patch(id, pinned, profile)
 }))
 
 import { $pinnedSessionIds } from '@/store/layout'
@@ -147,6 +153,35 @@ describe('watchSessionPins remote pull', () => {
       await flush()
 
       expect(patch).toHaveBeenCalledWith('shared', false, 'work')
+    } finally {
+      $activeGatewayProfile.set('default')
+    }
+  })
+
+  it('pins a same-named profile on gateway B to gateway B while gw-a is active', async () => {
+    // «Mis perfiles»: both gateways expose `default`, the AMBIENT profile is
+    // gw-a's, and the pinned session's row carries gw-b's connection tag. The
+    // PATCH must travel to gw-b (owner object), not resolve through the
+    // ambient tie-break — routing by bare profile name would write gw-a's
+    // state.db and leave gw-b's auto-archive sweep free to hide the chat.
+    $activeGatewayProfile.set('default')
+
+    try {
+      $sessions.set([
+        row('s-a', { connection_id: 'gw-a', profile: 'default' }),
+        row('s-b', { connection_id: 'gw-b', profile: 'default' })
+      ])
+      $pinnedSessionIds.set(['s-b'])
+      await flush()
+
+      expect(patch).toHaveBeenCalledWith('s-b', true, { connectionId: 'gw-b', profile: 'default' })
+      patch.mockClear()
+
+      // Same contract on the way down.
+      $pinnedSessionIds.set([])
+      await flush()
+
+      expect(patch).toHaveBeenCalledWith('s-b', false, { connectionId: 'gw-b', profile: 'default' })
     } finally {
       $activeGatewayProfile.set('default')
     }

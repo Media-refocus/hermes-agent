@@ -34,6 +34,7 @@ import { exportSession } from '@/lib/session-export'
 import { activeGateway } from '@/store/gateway'
 import { notify, notifyError } from '@/store/notifications'
 import { $projectTree, moveSessionToProject, projectIdForCwd, projectRootCwd } from '@/store/projects'
+import { requestForSessionProfile, type SessionOwnerScope } from '@/store/session-request-router'
 import {
   $activeSessionId,
   $connection,
@@ -52,6 +53,23 @@ import { canOpenSessionInTerminal, canOpenSessionWindow, openSessionInTerminal }
 
 import type { SessionTitleResponse } from '../../types'
 
+// The ambient dispatcher for a routed rename: same shape every session-scoped
+// RPC caller hands `requestForSessionProfile` (the live gateway socket). It is
+// only consulted when the router itself decides the owner is the ambient
+// route; a routed owner never dials it for a different backend.
+const ambientTitleRequest = <T,>(
+  method: string,
+  params?: Record<string, unknown>
+): Promise<T> => {
+  const gateway = activeGateway()
+
+  if (!gateway) {
+    return Promise.reject(new Error('Hermes gateway is not connected'))
+  }
+
+  return gateway.request<T>(method, params)
+}
+
 // Rename a session, preferring the gateway's session.title RPC over REST.
 //
 // A freshly *branched* session (and any brand-new chat) lives only in the
@@ -63,11 +81,13 @@ import type { SessionTitleResponse } from '../../types'
 // cannot. This mirrors the /title slash command's fix (use-prompt-actions.ts).
 //
 // We only take the RPC path for the ACTIVE/selected session: its runtime id is
-// known ($activeSessionId) and it lives on the active gateway, so there is no
-// profile-routing ambiguity. Every other row (already persisted, possibly on a
-// background profile) keeps the REST path, which handles profile scoping and a
-// non-empty title is required by the RPC (it rejects clears), so clears stay on
-// REST too.
+// known ($activeSessionId) and its owner is resolved through the same ladder
+// the REST fallback and every session-scoped RPC use (exact
+// connectionId+profile from the row or a hint, never the ambient gateway —
+// "active" is presentation, not routing). Every other row (already persisted,
+// possibly on a background profile) keeps the REST path, which handles profile
+// scoping and a non-empty title is required by the RPC (it rejects clears), so
+// clears stay on REST too.
 export async function renameSessionPreferringRpc(
   storedSessionId: string,
   title: string,
@@ -75,16 +95,29 @@ export async function renameSessionPreferringRpc(
 ): Promise<{ title?: string }> {
   const isActiveRow = storedSessionId === $selectedStoredSessionId.get()
   const runtimeId = isActiveRow ? $activeSessionId.get() : null
-  const gateway = activeGateway()
 
-  if (title && runtimeId && gateway) {
+  const row = $sessions.get().find(session => sessionMatchesStoredId(session, storedSessionId))
+  const owner = row?.connection_id && row.profile ? { connectionId: row.connection_id, profile: row.profile } : profile
+
+  if (title && runtimeId) {
     try {
-      const result = await gateway.request<SessionTitleResponse>('session.title', {
-        session_id: runtimeId,
-        title
-      })
+      // Route the RPC to the SAME owner the REST fallback would use: a raw
+      // `activeGateway()` request dials whichever profile is live, and under
+      // «Mis perfiles» (or any two-connection topology) that can be a
+      // different gateway than the one holding the session — the rename would
+      // 404 there or title the wrong chat. A routed owner uses the session
+      // request router; a legacy profile-only row keeps the active socket.
+      const result = owner
+        ? await requestForSessionProfile<SessionTitleResponse>(owner, ambientTitleRequest, 'session.title', {
+            session_id: runtimeId,
+            title
+          })
+        : await activeGateway()?.request<SessionTitleResponse>('session.title', { session_id: runtimeId, title })
 
-      return { title: result?.title ?? title }
+      // A gateway-less legacy path served nothing: fall through to REST.
+      if (result) {
+        return { title: result?.title ?? title }
+      }
     } catch (err) {
       // Fall through to REST — e.g. the socket is mid-reconnect. REST still
       // works for any session that already has a persisted row. Log so a
@@ -93,9 +126,6 @@ export async function renameSessionPreferringRpc(
       console.warn('session.title RPC rename failed; falling back to REST', err)
     }
   }
-
-  const row = $sessions.get().find(session => sessionMatchesStoredId(session, storedSessionId))
-  const owner = row?.connection_id && row.profile ? { connectionId: row.connection_id, profile: row.profile } : profile
 
   return renameSession(storedSessionId, title, owner)
 }

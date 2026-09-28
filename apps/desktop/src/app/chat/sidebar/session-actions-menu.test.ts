@@ -1,7 +1,9 @@
 import { atom } from 'nanostores'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { $activeSessionId, $selectedStoredSessionId } from '@/store/session'
+import { $activeSessionId, $selectedStoredSessionId, setSessions } from '@/store/session'
+
+import { makeSessionInfo } from '@/test/session-info'
 
 import { renameSessionPreferringRpc } from './session-actions-menu'
 
@@ -17,10 +19,11 @@ import { renameSessionPreferringRpc } from './session-actions-menu'
 // subscriber synchronously — that reaches the @/store/gateway mock's
 // activeGateway() during the transitive import on line 4, before a plain
 // module-level const would be initialized (temporal dead zone).
-const { renameSession, request, activeGateway } = vi.hoisted(() => ({
+const { renameSession, request, activeGateway, routedRequest } = vi.hoisted(() => ({
   renameSession: vi.fn(async () => ({ ok: true, title: 'rest-title' })),
-  request: vi.fn(async () => ({ title: 'rpc-title' }) as never),
-  activeGateway: vi.fn<() => { request: unknown } | null>(() => ({ request: undefined }))
+  request: vi.fn(async (..._args: unknown[]) => ({ title: 'rpc-title' }) as never),
+  activeGateway: vi.fn<() => { request: unknown } | null>(() => ({ request: undefined })),
+  routedRequest: vi.fn(async (..._args: unknown[]) => ({ title: 'routed-title' }) as never)
 }))
 
 // Wire activeGateway's default return to the shared request mock now that it exists.
@@ -40,7 +43,29 @@ vi.mock('@/store/gateway', () => ({
   // atom plus the hoisted activeGateway so the synchronous subscriber doesn't
   // throw on an incomplete mock or hit an uninitialized reference.
   $gateway: atom(null),
-  activeGateway: () => activeGateway()
+  activeGateway: () => activeGateway(),
+  // The session request router's routed seam: what a connection-tagged owner
+  // (e.g. a «Mis perfiles» row on gw-b) must be dispatched through.
+  requestGatewayForAgent: routedRequest,
+  requestGatewayForProfile: routedRequest
+}))
+
+vi.mock('@/store/session-request-router', async importActual => ({
+  ...(await importActual<Record<string, unknown>>()),
+  requestForSessionProfile: (
+    owner: unknown,
+    _ambient: unknown,
+    method: string,
+    params?: Record<string, unknown>
+  ) =>
+    typeof owner === 'object' && owner !== null && 'connectionId' in owner
+      ? routedRequest(
+          (owner as { connectionId: string }).connectionId,
+          (owner as { connectionId: string; profile: string }).profile,
+          method,
+          params
+        )
+      : request(method, params)
 }))
 
 const RUNTIME_ID = 'rt-runtime-1'
@@ -49,10 +74,12 @@ const STORED_ID = 'stored-branch-1'
 afterEach(() => {
   renameSession.mockClear()
   request.mockClear()
+  routedRequest.mockClear()
   activeGateway.mockReset()
   activeGateway.mockReturnValue({ request })
   $activeSessionId.set(null)
   $selectedStoredSessionId.set(null)
+  setSessions([])
 })
 
 describe('renameSessionPreferringRpc', () => {
@@ -74,9 +101,22 @@ describe('renameSessionPreferringRpc', () => {
 
     const result = await renameSessionPreferringRpc(STORED_ID, 'My branch', 'work')
 
-    expect(request).toHaveBeenCalledOnce()
+    // The first (profile-only) attempt fails, and the rename still lands via
+    // REST with the same owner.
+    expect(renameSession).toHaveBeenCalledOnce()
     expect(renameSession).toHaveBeenCalledWith(STORED_ID, 'My branch', 'work')
     expect(result.title).toBe('rest-title')
+  })
+
+  it('routes the RPC through the session router for a legacy profile-only owner (ambient socket)', async () => {
+    $selectedStoredSessionId.set(STORED_ID)
+    $activeSessionId.set(RUNTIME_ID)
+
+    const result = await renameSessionPreferringRpc(STORED_ID, 'My branch', 'work')
+
+    expect(request).toHaveBeenCalledWith('session.title', { session_id: RUNTIME_ID, title: 'My branch' })
+    expect(renameSession).not.toHaveBeenCalled()
+    expect(result.title).toBe('rpc-title')
   })
 
   it('uses REST for a non-active row (background/persisted session)', async () => {
@@ -108,5 +148,24 @@ describe('renameSessionPreferringRpc', () => {
 
     expect(request).not.toHaveBeenCalled()
     expect(renameSession).toHaveBeenCalledWith(STORED_ID, 'My branch', undefined)
+  })
+
+  it('routes a connection-tagged active row to ITS gateway, not whichever is ambient', async () => {
+    // «Mis perfiles»: the session lives on gw-b while the window's ambient
+    // socket is gw-a. The RPC must reach gw-b — the routed owner — and the
+    // ambient gateway mock must never see the request.
+    setSessions([makeSessionInfo({ connection_id: 'gw-b', id: STORED_ID, profile: 'default' })])
+    $selectedStoredSessionId.set(STORED_ID)
+    $activeSessionId.set(RUNTIME_ID)
+
+    const result = await renameSessionPreferringRpc(STORED_ID, 'My branch')
+
+    expect(routedRequest).toHaveBeenCalledWith('gw-b', 'default', 'session.title', {
+      session_id: RUNTIME_ID,
+      title: 'My branch'
+    })
+    expect(request).not.toHaveBeenCalled()
+    expect(renameSession).not.toHaveBeenCalled()
+    expect(result.title).toBe('routed-title')
   })
 })

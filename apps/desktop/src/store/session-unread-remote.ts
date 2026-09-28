@@ -51,7 +51,16 @@ export async function markSessionUnread(storedId: string, unread: boolean): Prom
   setSessions(rows => rows.map(r => (r.id === storedId ? { ...r, unread } : r)))
 
   try {
-    await setSessionUnreadRemote(storedId, unread, row.profile)
+    // A connection-tagged row (registry-splice / «Mis perfiles») carries its
+    // exact route: two gateways can expose the same profile name, so a bare
+    // profile would PATCH whichever one is ambient instead of the owner.
+    await setSessionUnreadRemote(
+      storedId,
+      unread,
+      row.connection_id?.trim() && row.profile?.trim()
+        ? { connectionId: row.connection_id.trim(), profile: row.profile.trim() }
+        : row.profile
+    )
   } catch (err) {
     // Roll back visibly: the backend kept the old value.
     const guard2 = new Map($unreadWriteGuard.get())
