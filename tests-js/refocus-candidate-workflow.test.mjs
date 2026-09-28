@@ -75,3 +75,53 @@ it('never presents the public fork run artifact as private', () => {
   // The summary says the opposite, in plain words.
   expect(scriptOf('Job summary — what this is and what it is not')).toMatch(/artifact visibility \| \*\*PUBLIC\*\*/)
 })
+
+// Static validation of `${{ }}` expressions: GitHub rejects the whole
+// workflow with HTTP 422 "Unrecognized named-value" when an expression uses
+// a context not available where it sits (this bit us with `runner.temp` in
+// job-level env). Keep the reachable-context table in step with GitHub's
+// docs (docs/actions/learn/recipes/evaluate-expressions-in-workflows-and-actions
+// — contexts availability per workflow key).
+const EXPR = /\$\{\{(.*?)\}\}/g
+const contextsOf = expression => [...expression.matchAll(/[A-Za-z_][A-Za-z0-9_-]*(?:\.(?:[A-Za-z_][\w-]*|\*|\[.*?\]))*/g)]
+  .map(match => match[0].split('.')[0])
+  .filter(name => !['and', 'or', 'not', 'null', 'true', 'false', 'contains', 'startsWith', 'endsWith', 'format', 'join', 'toJSON', 'fromJSON', 'hashFiles'].includes(name))
+// Only the interior of `${{ }}` expressions matters: plain literals carry no context.
+const contextsIn = value => [...String(value).matchAll(EXPR)].flatMap(match => contextsOf(match[1]))
+
+it('every expression only names contexts available where it appears (HTTP 422 regression guard)', () => {
+  const topEnv = { 'workflow.env': workflow.env ?? {}, 'job env': job.env ?? {} }
+  // Job-level env cannot see runner/steps/job/matrix/env — the exact 422
+  // this repo shipped once (`runner.temp` at job env).
+  expect(Object.entries(topEnv)).toBeTruthy()
+  for (const [where, env] of Object.entries(topEnv)) {
+    for (const [key, value] of Object.entries(env)) {
+      for (const context of contextsIn(value)) {
+        expect(['github', 'inputs', 'vars', 'secrets', 'needs'], `${where}.${key} uses context '${context}'`).toContain(context)
+      }
+    }
+  }
+  // Step-level env may use runner/env/steps/job/matrix on top of the above.
+  for (const [index, step] of job.steps.entries()) {
+    for (const [key, value] of Object.entries(step.env ?? {})) {
+      for (const context of contextsIn(value)) {
+        expect(['github', 'inputs', 'vars', 'secrets', 'needs', 'runner', 'env', 'steps', 'job', 'matrix', 'strategy'], `steps[${index}].env.${key} uses context '${context}'`).toContain(context)
+      }
+    }
+  }
+  // Other expression-bearing spots the workflow relies on.
+  expect(contextsIn(workflow.concurrency.group)).toEqual(['inputs'])
+  expect(contextsIn(job.steps[0].with.ref)).toEqual(['inputs'])
+  const upload = job.steps.find(step => String(step.uses ?? '').startsWith('actions/upload-artifact'))
+  expect(contextsIn(upload.with.name)).toEqual(['inputs'])
+  expect(contextsIn(upload.with.path)).toEqual(['env'])
+})
+
+it('ELECTRON_BUILDER_CACHE lives on the steps that use the cache, keyed to RUNNER_TEMP-equivalent runner.temp', () => {
+  expect(job.env.ELECTRON_BUILDER_CACHE).toBeUndefined() // job env cannot use runner.*
+  const expected = '${{ runner.temp }}/electron-builder-cache'
+  for (const name of ['Prepare the desktop build (refocus variant, commit identity)',
+    'Build and package the candidate MSIX (no upload, no signing)']) {
+    expect(stepByName(name).env.ELECTRON_BUILDER_CACHE).toBe(expected)
+  }
+})
