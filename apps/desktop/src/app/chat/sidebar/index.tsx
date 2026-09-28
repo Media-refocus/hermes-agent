@@ -74,7 +74,7 @@ import {
   toggleSidebarMessagingOpen,
   unpinSession
 } from '@/store/layout'
-import { $myProfilesGatewayErrors, $myProfilesSelection } from '@/store/my-profiles'
+import { $myProfilesGatewayErrors, $myProfilesIncomplete, $myProfilesSelection } from '@/store/my-profiles'
 import {
   $myProfilesProjectTree,
   $myProfilesProjectTreeGatewayErrors,
@@ -492,6 +492,7 @@ export function ChatSidebar({
   const sessionsLoading = useStore($sessionsLoading)
   const sessionsLoadError = useStore($sessionsLoadError)
   const myProfilesGatewayErrors = useStore($myProfilesGatewayErrors)
+  const myProfilesIncomplete = useStore($myProfilesIncomplete)
   const sessionProfilesTruncated = useStore($sessionProfilesTruncated)
   const unreadCount = useStore($unreadFinishedSessionIds).length
   const profiles = useStore($profiles)
@@ -1808,6 +1809,12 @@ export function ChatSidebar({
                 sessions={searchResults}
                 showProfileTags={showAllProfiles}
               />
+            )}
+
+            {profileScope === MY_PROFILES_SCOPE && myProfilesIncomplete.length > 0 && (
+              <p className="mx-2 rounded-md bg-(--ui-warning-subtle) px-2 py-1 text-xs text-(--ui-text-secondary)" role="status">
+                {t.profiles.sessionsIncomplete}
+              </p>
             )}
 
             {profileScope === MY_PROFILES_SCOPE &&

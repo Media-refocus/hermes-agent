@@ -2957,6 +2957,7 @@ export const zh = defineLocale({
     allProfiles: '全部配置档案',
     myProfiles: '我的配置档案',
     gatewayOffline: (gateway: string) => `${gateway} 离线，其会话可能无法使用。`,
+    sessionsIncomplete: `列表可能不完整——存在的会话数超过了此视图可加载的数量。`,
     loadingProfiles: '正在加载配置档案…',
     noProfilesFound: '未找到已注册网关的配置档案。',
     showAllProfiles: '显示全部配置档案',

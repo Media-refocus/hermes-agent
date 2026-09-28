@@ -2331,6 +2331,7 @@ export const ru = defineLocale({
     allProfiles: 'Все профили',
     myProfiles: 'Мои профили',
     gatewayOffline: (gateway: string) => `${gateway} не в сети — сессии могут быть недоступны.`,
+    sessionsIncomplete: `Список может быть неполным — сеансов больше, чем может загрузить этот вид.`,
     loadingProfiles: 'Загрузка профилей…',
     noProfilesFound: 'На зарегистрированных шлюзах профили не найдены.',
     showAllProfiles: 'Показать все профили',

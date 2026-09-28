@@ -3513,6 +3513,7 @@ export const esOverrides = {
     allProfiles: 'Todos los perfiles',
     myProfiles: 'Mis perfiles',
     gatewayOffline: (gateway: string) => `${gateway} no está conectado; sus sesiones podrían no estar disponibles.`,
+    sessionsIncomplete: `Lista posiblemente incompleta: hay más sesiones de las que esta vista puede cargar.`,
     loadingProfiles: 'Cargando perfiles…',
     noProfilesFound: 'No se encontraron perfiles en las pasarelas registradas.',
     showAllProfiles: 'Mostrar todos los perfiles',

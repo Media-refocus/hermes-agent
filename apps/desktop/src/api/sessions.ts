@@ -311,6 +311,36 @@ export async function listSidebarSessionsProjectTree(
   })
 }
 
+/** One page of the per-profile session list for the «Mis perfiles» fan-out.
+ *  `/api/profiles/sessions/sidebar` hard-caps its recents window at 500 rows per
+ *  profile, so a route that filled its window pages the rest here: the same DB,
+ *  the same filters (min_messages=1, archived excluded, recency order, the
+ *  recents source taxonomy), explicit LIMIT≤100/OFFSET — and the `connectionId`
+ *  pin so same-named profiles on two gateways never swap hosts. The caller
+ *  stamps rows with the route: the ambient owner stamper would lie under a
+ *  multi-gateway scope. */
+export async function listRouteSessionsPage(
+  route: SessionRoutePin,
+  options: { limit: number; offset: number; excludeSources: string[] }
+): Promise<PaginatedSessions> {
+  const params = new URLSearchParams({
+    profile: route.profile,
+    limit: String(Math.max(1, Math.min(100, options.limit))),
+    offset: String(Math.max(0, options.offset)),
+    min_messages: '1',
+    archived: 'exclude',
+    order: 'recent',
+    exclude_sources: options.excludeSources.join(',')
+  })
+
+  return hermesApi<PaginatedSessions>({
+    connectionId: route.connectionId,
+    profile: route.profile,
+    path: `/api/sessions?${params.toString()}`,
+    timeoutMs: SESSION_LIST_REQUEST_TIMEOUT_MS
+  })
+}
+
 /** The PR each of these sessions opened, recovered from its own transcript —
  *  for sessions whose recorded branch can't answer (they started on trunk and
  *  did the work in a worktree). Also returns every id it looked at, so the

@@ -2101,6 +2101,7 @@ export const ja = defineLocale({
     allProfiles: 'すべてのプロファイル',
     myProfiles: 'マイプロフィール',
     gatewayOffline: (gateway: string) => `${gateway} はオフラインです。セッションを利用できない場合があります。`,
+    sessionsIncomplete: `リストが不完全な可能性があります。このビューで読み込めるより多くのセッションが存在します。`,
     loadingProfiles: 'プロフィールを読み込み中…',
     noProfilesFound: '登録済みゲートウェイにプロフィールがありません。',
     showAllProfiles: 'すべてのプロファイルを表示',

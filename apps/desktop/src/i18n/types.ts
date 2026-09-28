@@ -2635,6 +2635,7 @@ export interface Translations {
     allProfiles: string
     myProfiles: string
     gatewayOffline: (gateway: string) => string
+    sessionsIncomplete: string
     loadingProfiles: string
     noProfilesFound: string
     showAllProfiles: string

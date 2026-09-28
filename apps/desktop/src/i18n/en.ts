@@ -3142,6 +3142,7 @@ export const en: Translations = {
     allProfiles: 'All profiles',
     myProfiles: 'My profiles',
     gatewayOffline: (gateway: string) => `${gateway} is offline — its sessions may be unavailable.`,
+    sessionsIncomplete: `List may be incomplete — more sessions exist than this view can load.`,
     loadingProfiles: 'Loading profiles…',
     noProfilesFound: 'No registered gateway profiles found.',
     showAllProfiles: 'Show all profiles',

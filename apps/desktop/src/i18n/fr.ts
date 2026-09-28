@@ -3530,6 +3530,7 @@ export const frOverrides = {
     allProfiles: 'Tous les profils',
     myProfiles: 'Mes profils',
     gatewayOffline: (gateway: string) => `${gateway} est hors ligne ; ses sessions peuvent être indisponibles.`,
+    sessionsIncomplete: `Liste possiblement incomplète — il existe plus de sessions que cette vue ne peut en charger.`,
     loadingProfiles: 'Chargement des profils…',
     noProfilesFound: 'Aucun profil trouvé sur les passerelles enregistrées.',
     showAllProfiles: 'Afficher tous les profils',

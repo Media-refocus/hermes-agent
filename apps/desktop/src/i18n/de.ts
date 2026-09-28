@@ -3523,6 +3523,7 @@ export const deOverrides = {
     allProfiles: 'Alle Profile',
     myProfiles: 'Meine Profile',
     gatewayOffline: (gateway: string) => `${gateway} ist offline – Sitzungen sind möglicherweise nicht verfügbar.`,
+    sessionsIncomplete: `Liste möglicherweise unvollständig – es gibt mehr Sitzungen, als diese Ansicht laden kann.`,
     loadingProfiles: 'Profile werden geladen…',
     noProfilesFound: 'Keine Profile auf registrierten Gateways gefunden.',
     showAllProfiles: 'Alle Profile anzeigen',

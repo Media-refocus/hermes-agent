@@ -1761,6 +1761,7 @@ export const ar = defineLocale({
     allProfiles: 'كل الملفات الشخصية',
     myProfiles: 'ملفاتي الشخصية',
     gatewayOffline: (gateway: string) => `${gateway} غير متصل؛ قد لا تتوفر جلساته.`,
+    sessionsIncomplete: `قد تكون القائمة غير مكتملة — توجد جلسات أكثر مما يمكن لهذا العرض تحميله.`,
     loadingProfiles: 'جارٍ تحميل الملفات الشخصية…',
     noProfilesFound: 'لم يتم العثور على ملفات شخصية في البوابات المسجلة.',
     showAllProfiles: 'إظهار كل الملفات الشخصية',

@@ -2328,6 +2328,7 @@ export const zhHant = defineLocale({
     allProfiles: '全部設定檔',
     myProfiles: '我的設定檔',
     gatewayOffline: (gateway: string) => `${gateway} 離線，可能無法使用其工作階段。`,
+    sessionsIncomplete: `清單可能不完整——存在的工作階段數超過此檢視可載入的數量。`,
     loadingProfiles: '正在載入設定檔…',
     noProfilesFound: '找不到已註冊閘道的設定檔。',
     showAllProfiles: '顯示全部設定檔',
