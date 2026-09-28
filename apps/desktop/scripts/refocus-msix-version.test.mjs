@@ -15,7 +15,7 @@ afterEach(() => {
 })
 
 function refocusFixture() {
-  const root = fs.mkdtempSync(path.join(os.homedir(), '.hermes/profiles/bulma/cache/scratch/', 'refocus-msix-'))
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'refocus-msix-'))
   roots.push(root)
   const desktop = path.join(root, 'apps/desktop')
   fs.mkdirSync(path.join(desktop, 'assets'), { recursive: true })
