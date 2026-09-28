@@ -36,6 +36,19 @@ def npm_command(node: str) -> list[str]:
     return [node, str(ROOT / "scripts/build/node-deps.mjs"), "--npm"]
 
 
+def stage_packaging_icons(icons: Path, desktop: Path, variant: str) -> None:
+    """Stage generated assets for legacy variants, never rewrite Refocus source.
+
+    Refocus commit icons are intentionally generated into the ignored products
+    tree for renderer/web builds. Electron Builder and its MSIX hook consume
+    ``apps/desktop/assets`` directly, so Refocus packages the admitted,
+    checked-in icon set there rather than copying commit-specific renderings
+    over tracked files before the second source-integrity checkpoint.
+    """
+    if variant != "refocus":
+        shutil.copytree(icons / "apps/desktop/assets", desktop / "assets", dirs_exist_ok=True)
+
+
 def build(repo: Path, tag: str | None, variant: str, builder_args: list[str],
           commit_build: str | None = None) -> None:
     from scripts.bundles.desktop_prepare import BuildRequest, prepare
@@ -112,7 +125,7 @@ def _build_prepared(prepared, builder_args: list[str], variant: str | None) -> N
             raise RuntimeError("prepared payload assembly failed")
     from scripts.bundles.desktop_prepare import require_source
     require_source(repo, request.commit)
-    shutil.copytree(icons / "apps/desktop/assets", desktop / "assets", dirs_exist_ok=True)
+    stage_packaging_icons(icons, desktop, variant)
     run([node, "scripts/write-build-stamp.mjs"], cwd=desktop, env=env)
     run([node, "scripts/build/desktop.mjs", "--source", str(repo), "--icons", str(icons),
          "--stamp", str(desktop / "build/install-stamp.json"), "--native-deps", str(prepared.native),
