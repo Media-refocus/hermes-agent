@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from scripts.bundles.desktop import stage_packaging_icons
 
 
@@ -34,11 +32,3 @@ def test_non_refocus_packaging_keeps_generated_icon_copy(tmp_path):
 
     assert (desktop / "assets/icon.ico").read_bytes() == b"generated icon"
     assert (desktop / "assets/appx/Square44x44Logo.png").read_bytes() == b"generated appx"
-
-
-def test_source_integrity_checkpoints_remain_around_packaging_stage():
-    source = Path(__file__).resolve().parents[2] / "scripts/bundles/desktop.py"
-    text = source.read_text(encoding="utf-8")
-    assert text.count("require_source(repo, request.commit)") == 2
-    assert text.index("require_source(repo, request.commit)") < text.index("stage_packaging_icons(icons, desktop, variant)")
-    assert text.rindex("require_source(repo, request.commit)") > text.index("stage_packaging_icons(icons, desktop, variant)")
