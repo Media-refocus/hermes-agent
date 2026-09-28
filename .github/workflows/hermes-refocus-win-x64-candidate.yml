@@ -65,7 +65,10 @@ jobs:
     env:
       BUILD_SHA: ${{ inputs.ref }}
       CLOUDFLARE_R2_PUBLIC_URL: ''
-      ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
+      # NOTE: job-level env cannot reference the `runner` context (GitHub
+      # rejects the workflow with HTTP 422 "Unrecognized named-value:
+      # 'runner'"), so ELECTRON_BUILDER_CACHE lives on the steps that use
+      # the cache, where `${{ runner.temp }}` IS supported.
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -143,6 +146,7 @@ jobs:
           HERMES_DESKTOP_VARIANT: refocus
           HERMES_BUILD_COMMIT: ${{ env.BUILD_SHA }}
           HERMES_RELEASE_EPOCH: ${{ env.HERMES_RELEASE_EPOCH }}
+          ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
           PYTHONUTF8: '1'
         run: |
           set -euo pipefail
@@ -155,6 +159,7 @@ jobs:
           HERMES_DESKTOP_VARIANT: refocus
           HERMES_BUILD_COMMIT: ${{ env.BUILD_SHA }}
           HERMES_RELEASE_EPOCH: ${{ env.HERMES_RELEASE_EPOCH }}
+          ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
           PYTHONUTF8: '1'
         run: |
           set -euo pipefail
