@@ -34,6 +34,33 @@ function fail(message) {
   process.exit(1)
 }
 
+/**
+ * Evaluate product-identity.cjs in a child Node with the given environment.
+ * A throw inside the identity module surfaces here as a raw stack (the child
+ * dies with a non-zero exit); catch it and present the actionable gate
+ * message instead of a frame dump.
+ * @param {NodeJS.ProcessEnv} env
+ * @param {string} identityPath
+ * @returns {Record<string, unknown>}
+ */
+function readIdentity(env, identityPath) {
+  try {
+    return JSON.parse(execFileSync(
+      process.execPath,
+      ['-e', 'console.log(JSON.stringify(require(process.argv[1])))', identityPath],
+      { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+    ))
+  } catch (error) {
+    // The child's stderr is: source frames, then "Error: <gate message>",
+    // then the stack and the "Node.js v…" banner. Keep the gate message.
+    const stderr = String(error.stderr || '')
+    const detail = /^Error: (.+)$/m.exec(stderr)?.[1]?.trim()
+    fail(`product-identity.cjs refused this build environment: ${detail || 'no detail'}. ` +
+      'Check HERMES_DESKTOP_VARIANT, HERMES_BUILD_COMMIT, HERMES_PAYLOAD_VERSION and ' +
+      '(for signed builds) HERMES_MSIX_PUBLISHER — the identity gate requires a coherent one.')
+  }
+}
+
 const sha = process.argv[2] || ''
 if (!/^[0-9a-f]{40}$/.test(sha)) fail('pass the full 40-character commit SHA as the first argument')
 
@@ -55,11 +82,7 @@ const env = {
   HERMES_PAYLOAD_VERSION: String(stamp.baseVersion || '0.0.0')
 }
 delete env._HERMES_CHANNEL_REQUEST_JSON
-const identity = JSON.parse(execFileSync(
-  process.execPath,
-  ['-e', 'console.log(JSON.stringify(require(process.argv[1])))', path.join(identityDir, "product-identity.cjs")],
-  { env, encoding: 'utf8' }
-))
+const identity = readIdentity(env, path.join(identityDir, "product-identity.cjs"))
 
 if (identity.refocus !== true) fail('identity lacks the refocus flag')
 if (identity.channel !== null) fail(`identity must own no feed channel, got ${identity.channel}`)
@@ -105,11 +128,7 @@ const officialEnvs = [
   { HERMES_DESKTOP_VARIANT: 'store' }
 ]
 for (const officialEnv of officialEnvs) {
-  const official = JSON.parse(execFileSync(
-    process.execPath,
-    ['-e', 'console.log(JSON.stringify(require(process.argv[1])))', path.join(identityDir, "product-identity.cjs")],
-    { env: { ...process.env, ...officialEnv }, encoding: 'utf8' }
-  ))
+  const official = readIdentity({ ...process.env, ...officialEnv }, path.join(identityDir, "product-identity.cjs"))
   for (const field of Object.keys(expected)) {
     if (identity[field] === official[field]) fail(`identity ${field} collides with the official ${officialEnv.HERMES_DESKTOP_VARIANT} product`)
   }

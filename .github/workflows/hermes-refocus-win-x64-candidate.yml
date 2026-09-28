@@ -1,10 +1,13 @@
-# Hermes Refocus — private Windows x64 canary candidate (NO publishing).
+# Hermes Refocus — Windows x64 canary candidate (NO publishing).
 #
 # Hand-dispatched build of the `refocus` desktop variant on a GitHub-hosted
-# Windows x64 runner. The candidate MSIX is uploaded as a private run
-# artifact; nothing is published — no releases, no R2 feed, no channel
-# descriptors, no Store submission. The job's token is read-only for the
-# repository (contents: read) and can only reach the artifact store.
+# Windows x64 runner. This fork (Media-refocus/hermes-agent) is PUBLIC: the
+# candidate MSIX is uploaded as a run artifact of a public repository and is
+# downloadable by anyone who can open the run. It contains only the unsigned
+# MSIX built from public code — no secrets — but "artifact only" must never
+# be read as "private". Nothing is published: no releases, no R2 feed, no
+# channel descriptors, no Store submission. The job's token is read-only for
+# the repository (contents: read) and can only reach the artifact store.
 #
 # Identity: HERMES_DESKTOP_VARIANT=refocus + HERMES_BUILD_COMMIT (the commit
 # is stamped for provenance, NOT worn on the product). The candidate is the
@@ -85,6 +88,24 @@ jobs:
           fi
           echo "building commit $BUILD_SHA"
 
+      # One build clock for the whole job, pinned once and threaded through
+      # prepare, build and both version gates: scripts/bundles/desktop.py
+      # derives the MSIX quad from HERMES_RELEASE_EPOCH when it is set (and
+      # from time.time() when it is not), so pinning it here makes the
+      # expected quad computable and the build deterministic. Verify-time
+      # recomputes the same quad with the same immutable input.
+      - name: Pin the release epoch (one build clock for the job)
+        shell: bash
+        run: |
+          set -euo pipefail
+          epoch="$(date -u +%s)"
+          if ! [[ "$epoch" =~ ^[0-9]+$ ]]; then
+            echo "::error::could not pin a numeric release epoch (got: '$epoch')"
+            exit 1
+          fi
+          echo "HERMES_RELEASE_EPOCH=$epoch" >> "$GITHUB_ENV"
+          echo "pinned HERMES_RELEASE_EPOCH=$epoch (UTC: $(date -u -d "@$epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$epoch" +%Y-%m-%dT%H:%M:%SZ))"
+
       - name: Fail closed if signing credentials leak into this build
         shell: bash
         env:
@@ -101,7 +122,7 @@ jobs:
             [ -n "${!name}" ] && present="$present $name"
           done
           if [ -n "$present" ]; then
-            echo "::error::Azure Trusted Signing vars are set ($present) but this private fork has no authorized certificate. A signed build would carry a trust anchor the refocus identity does not own. Unset them and re-run."
+            echo "::error::Azure Trusted Signing vars are set ($present) but this public fork has no authorized certificate. A signed build would carry a trust anchor the refocus identity does not own. Unset them and re-run."
             exit 1
           fi
 
@@ -121,6 +142,7 @@ jobs:
         env:
           HERMES_DESKTOP_VARIANT: refocus
           HERMES_BUILD_COMMIT: ${{ env.BUILD_SHA }}
+          HERMES_RELEASE_EPOCH: ${{ env.HERMES_RELEASE_EPOCH }}
           PYTHONUTF8: '1'
         run: |
           set -euo pipefail
@@ -132,6 +154,7 @@ jobs:
         env:
           HERMES_DESKTOP_VARIANT: refocus
           HERMES_BUILD_COMMIT: ${{ env.BUILD_SHA }}
+          HERMES_RELEASE_EPOCH: ${{ env.HERMES_RELEASE_EPOCH }}
           PYTHONUTF8: '1'
         run: |
           set -euo pipefail
@@ -183,9 +206,25 @@ jobs:
             Write-Output "::error::MSIX Version is 0.0.0.0 — the version gate did not run; in-place updates would be refused"
             exit 1
           }
+          # Exact version gate: the build pinned HERMES_RELEASE_EPOCH at job
+          # start and desktop.py stamped canaryPackageVersionAt(epoch) into
+          # the manifest. Recompute the SAME quad from the SAME pinned epoch
+          # with the SAME helper and demand a byte-exact match — anything
+          # else means the packaged Version drifted from the job's build
+          # clock (or the gate is checking the wrong artifact) and the run
+          # must fail closed.
+          $expected = node -e "import('./scripts/msix-shared.mjs').then(m => console.log(m.canaryPackageVersionAt(Number(process.argv[1]))))" "$env:HERMES_RELEASE_EPOCH"
+          if ($LASTEXITCODE -ne 0 -or -not $expected) {
+            Write-Output "::error::could not recompute the expected package quad from the pinned HERMES_RELEASE_EPOCH ('$env:HERMES_RELEASE_EPOCH'); refusing to pass the gate on an unknown expectation"
+            exit 1
+          }
+          if ($identity.Version -cne $expected.Trim()) {
+            Write-Output "::error::MSIX Version is $($identity.Version), expected exactly $expected (canaryPackageVersionAt of the pinned HERMES_RELEASE_EPOCH=$env:HERMES_RELEASE_EPOCH). The packaged version does not match the job's build clock."
+            exit 1
+          }
           Write-Output "identity: $($identity.Name) $($identity.Version) publisher=$($identity.Publisher)"
 
-      - name: Upload the private candidate artifact
+      - name: Upload the candidate artifact (public run artifact — NOT a release)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: hermes-refocus-win-x64-${{ inputs.ref }}
@@ -205,7 +244,8 @@ jobs:
             echo "| variant | \`refocus\` (commit-stamped, product-stable) |"
             echo "| candidate | \`${CANDIDATE_NAME}\` |"
             echo "| signed | **no** — no ATS certificate exists for this fork |"
-            echo "| published | **nothing** — artifact of this run only |"
+            echo "| published | **nothing** — run artifact only |"
+            echo "| artifact visibility | **PUBLIC** — this fork is a public repository; anyone can download the artifact from this run. It is built from public code and contains no secrets, but it is not a private artifact. |"
             echo ""
             echo "### Install honesty"
             echo "- A plain \`Add-AppxPackage -Path <candidate>\` **fails** on this"
