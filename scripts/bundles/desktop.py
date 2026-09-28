@@ -102,6 +102,10 @@ def _build_prepared(prepared, builder_args: list[str], variant: str | None) -> N
         # 0.0.0.0 (pyproject version) and Windows refuses every update.
         # HERMES_RELEASE_EPOCH pins the clock when a caller needs determinism.
         epoch = int(os.environ.get("HERMES_RELEASE_EPOCH") or time.time())
+        # The custom AppxManifest is staged later by electron-builder's hook.
+        # Pass it the exact clock used by these overrides, rather than letting
+        # appIdentity fall back to the commit's payload semver.
+        env["HERMES_RELEASE_EPOCH"] = str(epoch)
         script = "const m=require('./scripts/msix-shared.mjs');console.log(m.canaryPackageVersionAt(Number(process.argv[1])))"
         quad = capture([node, "-e", script, str(epoch)], repo).strip()
         version_args = [f"-c.extraMetadata.version={quad}", f"-c.extraMetadata.shortVersion={quad}",

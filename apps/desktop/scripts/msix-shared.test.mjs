@@ -17,11 +17,11 @@ const msix = await import('../../../scripts/msix-shared.mjs')
 
 // A fake desktop dir with just enough for appIdentity: product-identity.cjs
 // (the bundled variant) + a package.json version.
-function makeFakeDesktop(version) {
+function makeFakeDesktop(version, identity = "module.exports = { store: false, light: false, displayName: 'Hermes', appId: 'com.nousresearch.hermes-bundled', channel: 'latest', artifactNamePascal: 'HermesBundled', msixAppIdWithOrg: 'NousResearch.HermesBundled' }\n") {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'msix-ident-'))
   fs.writeFileSync(
     path.join(dir, 'product-identity.cjs'),
-    "module.exports = { store: false, light: false, displayName: 'Hermes', appId: 'com.nousresearch.hermes-bundled', channel: 'latest', artifactNamePascal: 'HermesBundled', msixAppIdWithOrg: 'NousResearch.HermesBundled' }\n"
+    identity
   )
   fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'hermes-desktop', version }))
   return dir
@@ -44,6 +44,27 @@ test('explicit stable tag owns the package version, independent of checkout meta
     assert.equal(msix.appIdentity(desktop, '').version, '0.1.0.0')
     assert.throws(() => msix.appIdentity(desktop, 'v0.27.1-invalid'), /release tag/)
   } finally {
+    fs.rmSync(desktop, { recursive: true, force: true })
+  }
+})
+
+test('refocus manifest version comes from the pinned build epoch, not payload semver', () => {
+  const identity = "module.exports = { store: false, light: false, refocus: true, displayName: 'Hermes Refocus', appId: 'com.refocus.hermes', channel: null, artifactNamePascal: 'HermesRefocus', msixAppIdWithOrg: 'Refocus.HermesRefocus' }\n"
+  const desktop = makeFakeDesktop('0.0.0', identity)
+  const epoch = 1790590421
+  vi.stubEnv('HERMES_BUILD_COMMIT', '5527d9aca2b94e3f891b7245b6160497957e6ef0')
+  vi.stubEnv('HERMES_PAYLOAD_VERSION', '0.0.0')
+  vi.stubEnv('HERMES_DESKTOP_VARIANT', 'refocus')
+  vi.stubEnv('HERMES_RELEASE_EPOCH', String(epoch))
+  try {
+    const app = msix.appIdentity(desktop)
+    const template = fs.readFileSync(new URL('../assets/msix-manifest.xml', import.meta.url), 'utf8')
+    const manifest = msix.nativeManifestTemplate(template, app.version)
+    assert.equal(app.version, '26.928.10.1341')
+    assert.ok(manifest.includes('Version="26.928.10.1341"'))
+    assert.equal(app.fileVersion, '0.0.0')
+  } finally {
+    vi.unstubAllEnvs()
     fs.rmSync(desktop, { recursive: true, force: true })
   }
 })

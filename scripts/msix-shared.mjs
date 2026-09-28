@@ -255,6 +255,16 @@ export function appIdentity(desktopDir, tag = process.env.HERMES_PAYLOAD_TAG || 
       throw new Error('Commit builds require HERMES_PAYLOAD_VERSION=X.Y.Z with 16-bit fields')
     }
     if (identity.store) throw new Error('Store packaging requires a stable release tag')
+    // Refocus is a single in-place-updating package across commits. Its MSIX
+    // manifest must use the same immutable build clock as desktop.py's builder
+    // arguments; app semver is only the executable/file version.
+    if (identity.refocus) {
+      const epoch = Number(process.env.HERMES_RELEASE_EPOCH)
+      if (!/^\d+$/.test(process.env.HERMES_RELEASE_EPOCH || '') || !Number.isSafeInteger(epoch)) {
+        throw new Error('Refocus commit packages require an immutable HERMES_RELEASE_EPOCH')
+      }
+      return { identity, version: canaryPackageVersionAt(epoch), fileVersion: version, name: identity.artifactNamePascal }
+    }
     return { identity, version: `${version}.0`, fileVersion: version, name: identity.artifactNamePascal }
   }
   if (identity.store) {
