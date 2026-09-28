@@ -1,138 +1,90 @@
-// hermes-refocus-win-x64-signed-candidate.yml — the SIGNED lane's declared
-// contract, pinned statically like refocus-candidate-workflow.test.mjs:
-// two jobs, the secret exists ONLY behind the protected environment in the
-// build job, admission runs WITHOUT secrets and refuses anything but real
-// ancestry of the mis-perfiles branch, the PFX is staged to runner temp and
-// deleted in an always() step, gates demand Authenticode Valid + exact
-// identity, and nothing publishes.
+// Structural contract tests for the signed workflow. YAML shape is static;
+// the PowerShell/GitHub-hosted Windows execution is not exercised locally.
 import { readFileSync } from 'node:fs'
 import { load } from 'js-yaml'
 import { expect, it } from 'vitest'
 
-import { canaryPackageVersionAt } from '../scripts/msix-shared.mjs'
-
 const workflow = load(readFileSync(new URL('../.github/workflows/hermes-refocus-win-x64-signed-candidate.yml', import.meta.url), 'utf8'))
-const admissionJob = workflow.jobs['signed-canary-admission']
-const buildJob = workflow.jobs['signed-canary-build']
-const stepByName = (job, name) => job.steps.find(step => step.name === name)
-const scriptOf = (job, name) => stepByName(job, name).run
-const allSteps = [...admissionJob.steps, ...buildJob.steps]
+const build = workflow.jobs['build-candidate']
+const sign = workflow.jobs['sign-candidate']
+const step = (job, name) => job.steps.find(item => item.name === name)
+const run = (job, name) => step(job, name)?.run ?? ''
 
-it('has exactly two jobs: admission (secret-free) and build (protected environment)', () => {
-  expect(Object.keys(workflow.jobs).sort()).toEqual(['signed-canary-admission', 'signed-canary-build'])
-  expect(admissionJob.environment).toBeUndefined()
-  expect(buildJob.environment).toBe('refocus-signed-canary')
-  expect(buildJob.needs).toContain('signed-canary-admission')
-})
-
-it('top-level permissions are contents:read only, in both jobs', () => {
+it('has exactly two trust-separated jobs and read-only permissions', () => {
+  expect(Object.keys(workflow.jobs).sort()).toEqual(['build-candidate', 'sign-candidate'])
   expect(workflow.permissions).toEqual({ contents: 'read' })
-  expect(admissionJob.permissions).toEqual({ contents: 'read' })
-  expect(buildJob.permissions).toEqual({ contents: 'read' })
+  expect(build.permissions).toEqual({ contents: 'read' })
+  expect(sign.permissions).toEqual({ actions: 'read', contents: 'read' })
+  expect(sign.needs).toBe('build-candidate')
+  expect(build.environment).toBeUndefined()
+  expect(sign.environment).toBe('refocus-signed-canary')
 })
 
-it('admission checks out the branch, admits ancestry, and sees NO secret anywhere', () => {
-  const checkout = admissionJob.steps.find(step => String(step.uses ?? '').startsWith('actions/checkout'))
-  expect(checkout.with.ref).toBe('refocus/mis-perfiles')
-  expect(checkout.with['persist-credentials']).toBe(false)
-  const run = scriptOf(admissionJob, 'Admit the exact commit (branch ancestry, fail closed)')
-  expect(run).toContain('refocus-signed-admission.mjs')
-  expect(run).toContain('origin/refocus/mis-perfiles')
-  // No secret reference anywhere in the admission job.
-  const jobText = JSON.stringify(admissionJob)
-  expect(jobText).not.toContain('secrets.')
-})
-
-it('the build job checks out the ADMITTED SHA, never a mutable ref', () => {
-  const checkout = buildJob.steps.find(step => String(step.uses ?? '').startsWith('actions/checkout'))
-  expect(checkout.with.ref).toBe("${{ needs.signed-canary-admission.outputs.sha }}")
-  expect(checkout.with['persist-credentials']).toBe(false)
-  expect(scriptOf(buildJob, 'Confirm the checkout is exactly the admitted commit')).toMatch(/not the admitted/)
-})
-
-it('the PFX is staged to runner temp (never workspace), path only, never echoed', () => {
-  const stage = stepByName(buildJob, 'Stage the PFX secret to the runner (never logged)')
-  expect(stage).toBeTruthy()
-  expect(stage.env.HERMES_MSIX_PFX_B64).toBe('${{ secrets.HERMES_MSIX_PFX_B64 }}')
-  expect(stage.run).toContain('$env:RUNNER_TEMP')
-  expect(stage.run).not.toMatch(/Write-(Output|Host).*PASSWORD/i)
-  expect(stage.run).toContain('HERMES_MSIX_PFX_B64))')
-  // The staged path lands in GITHUB_ENV, not in a log line.
-  expect(stage.run).toMatch(/Add-Content \$env:GITHUB_ENV/)
-})
-
-it('the staged PFX is deleted in a step that runs on failure too', () => {
-  const shred = stepByName(buildJob, 'Shred the staged PFX (runs even on gate failure)')
-  expect(shred).toBeTruthy()
-  expect(shred['if']).toBe('always()')
-  expect(shred.run).toContain('Remove-Item')
-})
-
-it('the workflow refuses to run unsigned: pre-flight gate + no-fallback check', () => {
-  expect(scriptOf(buildJob, 'Fail closed unless the signing secrets are coherent (pre-flight)'))
-    .toContain('secret-admission')
-  expect(scriptOf(buildJob, 'Verify the candidate identity and package version (fail closed)'))
-    .toMatch(/no staged PFX/)
-})
-
-it('the signature gate demands Authenticode Valid and the exact identity via the pure gates', () => {
-  const pwsh = scriptOf(buildJob, 'Verify the SIGNED MSIX (signature, identity, exact version)')
-  expect(pwsh).toMatch(/Status -ne 'Valid'/)
-  expect(pwsh).toContain('refocus-signed-gates-cli.mjs manifest-gate')
-  expect(pwsh).toContain('canaryPackageVersionAt')
-  expect(pwsh).toContain('$env:HERMES_RELEASE_EPOCH')
-  expect(pwsh).toMatch(/could not recompute the expected package quad/)
-})
-
-it('the unsigned lane tripwire is INVERTED here: signing vars must be absent, not present', () => {
-  const run = scriptOf(buildJob, 'Fail closed if Trusted Signing credentials leak into this lane')
-  expect(run).toMatch(/Unset them and re-run/)
-})
-
-it('the version expectation equals canaryPackageVersionAt of the pinned epoch', () => {
-  const EPOCH = Date.parse('2026-09-22T00:14:03Z') / 1000
-  expect(canaryPackageVersionAt(EPOCH)).toBe('26.922.0.1403')
-  const pwsh = scriptOf(buildJob, 'Verify the SIGNED MSIX (signature, identity, exact version)')
-  expect(pwsh).toContain("import('./scripts/msix-shared.mjs')")
-})
-
-it('publishes nothing: no release, no feed, no App Installer — artifact only, named PUBLIC', () => {
-  expect(scriptOf(buildJob, 'Job summary — what this is and what it is not'))
-    .toMatch(/artifact visibility \| \*\*PUBLIC\*\*/)
-  const uses = allSteps.map(step => String(step.uses ?? '')).filter(Boolean)
-  expect(uses.every(used => used.startsWith('actions/checkout') || used.startsWith('actions/setup-python') || used.startsWith('actions/upload-artifact'))).toBe(true)
-  expect(uses.some(used => used.startsWith('actions/upload-artifact'))).toBe(true)
-  const jobText = JSON.stringify(workflow)
-  expect(jobText).not.toMatch(/gh release|softprops|appinstaller|App Installer feed/i)
-})
-
-// Static `${{ }}` context validation (HTTP 422 regression guard — same
-// shape as refocus-candidate-workflow.test.mjs).
-const EXPR = /\$\{\{(.*?)\}\}/g
-const contextsOf = expression => [...expression.matchAll(/[A-Za-z_][A-Za-z0-9_-]*(?:\.(?:[A-Za-z_][\w-]*|\*|\[.*?\]))*/g)]
-  .map(match => match[0].split('.')[0])
-  .filter(name => !['and', 'or', 'not', 'null', 'true', 'false', 'contains', 'startsWith', 'endsWith', 'format', 'join', 'toJSON', 'fromJSON', 'hashFiles'].includes(name))
-const contextsIn = value => [...String(value).matchAll(EXPR)].flatMap(match => contextsOf(match[1]))
-
-it('every expression only names contexts available where it appears (HTTP 422 regression guard)', () => {
-  for (const [key, value] of Object.entries(workflow.concurrency ?? {})) {
-    for (const context of contextsIn(value)) {
-      expect(['github', 'inputs'], `concurrency.${key}`).toContain(context)
-    }
+it('both jobs require workflow_dispatch from the exact protected default-branch ref', () => {
+  expect(workflow.on.workflow_dispatch).toBeTruthy()
+  for (const job of [build, sign]) {
+    expect(job.if).toContain("github.ref == 'refs/heads/main'")
+    expect(job.if).toContain("github.workflow_ref == format(")
+    expect(job.if).toContain('@refs/heads/main')
   }
-  for (const [key, value] of Object.entries(buildJob.env ?? {})) {
-    for (const context of contextsIn(value)) {
-      expect(['github', 'inputs', 'vars', 'secrets', 'needs'], `build.env.${key} uses '${context}'`).toContain(context)
-    }
-  }
-  for (const job of [admissionJob, buildJob]) {
-    for (const [index, step] of job.steps.entries()) {
-      for (const [key, value] of Object.entries(step.env ?? {})) {
-        for (const context of contextsIn(value)) {
-          expect(['github', 'inputs', 'vars', 'secrets', 'needs', 'runner', 'env', 'steps', 'job', 'matrix', 'strategy'],
-            `steps[${index}].env.${key} uses context '${context}'`).toContain(context)
-        }
-      }
-    }
-  }
+  expect(sign.if).toContain('vars.REFOCUS_SIGNING_ENABLED')
+  expect(sign.if).toContain('I_VERIFIED_ENVIRONMENT_AND_BRANCH_PROTECTION')
+})
+
+it('candidate checkout and all candidate execution remain in the no-secrets build job', () => {
+  expect(build.steps.some(item => String(item.uses).startsWith('actions/checkout@'))).toBe(true)
+  expect(JSON.stringify(build)).not.toContain('secrets.')
+  expect(build.steps.some(item => /desktop\.py/.test(item.run ?? ''))).toBe(true)
+  expect(JSON.stringify(sign)).not.toContain('actions/checkout')
+  expect(JSON.stringify(sign)).not.toContain('desktop.py')
+  expect(JSON.stringify(sign)).not.toContain('node ')
+  expect(JSON.stringify(sign)).not.toContain('npm ')
+})
+
+it('transfers only the same-run artifact, then validates package data before signing', () => {
+  const upload = step(build, 'Upload unsigned package as data only')
+  const download = step(sign, 'Download this run\'s exact build artifact')
+  expect(upload.uses).toContain('actions/upload-artifact@')
+  expect(download.uses).toContain('actions/download-artifact@')
+  expect(download.with.name).toContain('${{ inputs.ref }}')
+  expect(download.with.path).toContain('${{ runner.temp }}')
+  const validate = run(sign, 'Validate unsigned package data (no code execution)')
+  expect(validate).toContain("$sig.Status -ne 'NotSigned'")
+  expect(validate).toContain('Refocus.HermesRefocus')
+  expect(validate).toContain('PINNED_SUBJECT')
+  expect(validate).toContain("identity.Version -notmatch")
+  expect(step(sign, 'Validate unsigned package data (no code execution)').env.BUILD_EPOCH)
+    .toBe('${{ needs.build-candidate.outputs.epoch }}')
+  expect(validate).toContain('does not match trusted build epoch')
+  expect(sign.steps.findIndex(item => item.name === 'Validate unsigned package data (no code execution)'))
+    .toBeLessThan(sign.steps.findIndex(item => item.name === 'Sign with the protected PFX (signtool)'))
+})
+
+it('keeps PFX references inside the signing step and uses real signtool signing plus independent verification', () => {
+  const signing = step(sign, 'Sign with the protected PFX (signtool)')
+  expect(signing.env.HERMES_MSIX_PFX_B64).toBe('${{ secrets.HERMES_MSIX_PFX_B64 }}')
+  expect(signing.env.HERMES_MSIX_PFX_PASSWORD).toBe('${{ secrets.HERMES_MSIX_PFX_PASSWORD }}')
+  expect(JSON.stringify(build)).not.toContain('HERMES_MSIX_PFX')
+  expect(JSON.stringify(sign.steps.filter(item => item !== signing))).not.toContain('secrets.')
+  expect(signing.run).toContain('signtool.FullName sign')
+  expect(signing.run).toContain('signtool.FullName verify /pa /all /v')
+  expect(signing.run).toContain("$result.Status -ne 'Valid'")
+  expect(signing.run).toContain('SignerCertificate.Thumbprint -cne $env:PINNED_THUMBPRINT')
+  expect(signing.run).toContain('SignerCertificate.Subject -cne $env:PINNED_SUBJECT')
+  expect(signing.run).toContain('Remove-Item -LiteralPath $pfx')
+})
+
+it('cannot sign until external environment verification and independent certificate pins are supplied', () => {
+  const gate = step(sign, 'Refuse unpinned certificate configuration before secret use')
+  expect(gate.env.PINNED_THUMBPRINT).toBe('SET_FIXED_40_HEX_CERT_THUMBPRINT_BEFORE_ENABLE')
+  expect(gate.env.PINNED_SUBJECT).toBe('SET_FIXED_EXACT_CERT_SUBJECT_BEFORE_ENABLE')
+  expect(gate.run).toContain('Fixed signer thumbprint/subject pins are unset')
+  expect(readFileSync(new URL('../.github/workflows/hermes-refocus-win-x64-signed-candidate.yml', import.meta.url), 'utf8'))
+    .toMatch(/GitHub Actions cannot prove a named environment has required reviewers from\s+# YAML alone/)
+})
+
+it('publishes only a short-lived public run artifact, never a feed or release', () => {
+  expect(sign.steps.some(item => String(item.uses).startsWith('actions/upload-artifact@'))).toBe(true)
+  const text = JSON.stringify(workflow)
+  expect(text).not.toMatch(/gh release|softprops|appinstaller/i)
 })

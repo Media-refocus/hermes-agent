@@ -1,19 +1,8 @@
-// refocus-signed-gates.mjs — pure verification logic for the SIGNED Hermes
-// Refocus canary lane. No subprocesses, no filesystem: every function takes
-// what it needs so the local suite exercises the exact decisions the
-// workflow's PowerShell gate makes on the runner.
-//
-// The signed lane's contract:
-//   - the PFX secret must be present and its password known (never logged)
-//   - the manifest Publisher must byte-match the PFX cert Subject
-//     (HERMES_MSIX_PUBLISHER); the provisional 'CN=Refocus Development' is
-//     never accepted on a signed build
-//   - the signing cert must chain to the machine's trusted-root store
-//     (self-signed root trusted ONLY on this one laptop) — a root with
-//     untrusted status fails closed
-//   - the package identity Name stays the stable Refocus.HermesRefocus and
-//     the Version is the exact canaryPackageVersionAt quad of the job's
-//     pinned HERMES_RELEASE_EPOCH
+// Pure decision helpers for the signed-candidate lane. These have no
+// subprocess or filesystem access and provide local behavioral coverage for
+// identity/version/unsigned-input and post-sign certificate decisions.
+// The workflow signer duplicates these checks in trusted PowerShell because
+// it deliberately never checks out or executes candidate-repository code.
 
 /** The provisional publisher is unsigned-candidate-only, by design. */
 export const PROVISIONAL_PUBLISHER = 'CN=Refocus Development'
@@ -56,24 +45,49 @@ export function manifestGate({ publisher, packageName, version }, { certSubject,
 }
 
 /**
- * The Authenticode signature-status gate. All leaf-cert fields arrive
- * explicitly (null when unknown) — the gate fails closed on an unknown
- * thumbprint/subject when an expectation was configured.
+ * Pre-sign gate for untrusted MSIX input. The signer treats the package only
+ * as data and requires a fixed external Subject, stable identity, valid MSIX
+ * version fields, and an unsigned input. expectedVersion must come from a
+ * trusted workflow value when exact version pinning is required.
+ */
+export function unsignedCandidateGate({ publisher, packageName, version, signatureStatus }, { expectedSubject, expectedVersion = version }) {
+  if (signatureStatus !== 'NotSigned') {
+    return { ok: false, reason: `input signature status is ${String(signatureStatus)}, expected NotSigned` }
+  }
+  if (!expectedSubject) return { ok: false, reason: 'fixed expected certificate Subject is missing' }
+  const manifest = manifestGate(
+    { publisher, packageName, version },
+    { certSubject: expectedSubject, expectedVersion }
+  )
+  if (!manifest.ok) return manifest
+  const fields = version.split('.').map(Number)
+  if (fields.some(field => !Number.isSafeInteger(field) || field > 65535)) {
+    return { ok: false, reason: `manifest Version ${version} has a field outside the MSIX 16-bit range` }
+  }
+  return { ok: true, reason: `unsigned ${manifest.reason}` }
+}
+
+/**
+ * The Authenticode signature-status gate. Both independent certificate pins
+ * and observed signature fields are mandatory; missing data fails closed.
  * @param {{ status: string, thumbprint?: string | null, subject?: string | null }} signature Get-AuthenticodeSignature fields
  * @param {{ expectedThumbprint: string | null, expectedSubject: string | null }} expected
  * @returns {{ ok: boolean, reason: string }}
  */
 export function signatureGate(signature, { expectedThumbprint, expectedSubject }) {
+  if (!/^[0-9a-fA-F]{40}$/.test(String(expectedThumbprint || ''))) {
+    return { ok: false, reason: 'fixed expected certificate thumbprint is missing or malformed' }
+  }
+  if (!String(expectedSubject || '').trim()) {
+    return { ok: false, reason: 'fixed expected certificate Subject is missing' }
+  }
   if (!signature || typeof signature.status !== 'string') return { ok: false, reason: 'no Authenticode signature object — the package carries no signature the gate could read' }
   if (signature.status !== 'Valid') return { ok: false, reason: `signature status is ${signature.status}, expected Valid (a status of HashMismatch/NotTrusted/UnknownError fails closed)` }
-  if (expectedThumbprint) {
-    const thumbprint = String(signature.thumbprint || '').trim()
-    if (thumbprint.toLowerCase() !== String(expectedThumbprint).trim().toLowerCase()) {
-      return { ok: false, reason: `signing cert thumbprint ${thumbprint || '(none)'} does not match the expected ${expectedThumbprint}` }
-    }
+  const thumbprint = String(signature.thumbprint || '').trim()
+  if (thumbprint.toLowerCase() !== String(expectedThumbprint).trim().toLowerCase()) {
+    return { ok: false, reason: `signing cert thumbprint ${thumbprint || '(none)'} does not match the expected ${expectedThumbprint}` }
   }
-  if (expectedSubject && signature.subject !== undefined && signature.subject !== null
-    && signature.subject !== expectedSubject) {
+  if (signature.subject !== expectedSubject) {
     return { ok: false, reason: `signing cert Subject ${JSON.stringify(signature.subject)} does not match ${JSON.stringify(expectedSubject)}` }
   }
   return { ok: true, reason: 'Authenticode Valid' }

@@ -9,7 +9,8 @@ import {
   manifestGate,
   parseCertInfo,
   secretAdmission,
-  signatureGate
+  signatureGate,
+  unsignedCandidateGate
 } from './refocus-signed-gates.mjs'
 
 const SUBJECT = 'CN=Refocus Canary, O=Refocus, L=Lisbon, S=Lisbon, C=PT'
@@ -70,29 +71,61 @@ describe('manifestGate', () => {
   })
 })
 
+describe('unsignedCandidateGate', () => {
+  const candidate = {
+    publisher: SUBJECT,
+    packageName: PACKAGE_NAME,
+    version: '26.922.0.1403',
+    signatureStatus: 'NotSigned'
+  }
+  const expected = { expectedSubject: SUBJECT, expectedVersion: '26.922.0.1403' }
+
+  it('accepts expected unsigned identity and exact package version', () => {
+    expect(unsignedCandidateGate(candidate, expected).ok).toBe(true)
+  })
+
+  it('rejects signed or unverifiable input before signing', () => {
+    for (const signatureStatus of ['Valid', 'HashMismatch', 'NotTrusted', null]) {
+      expect(unsignedCandidateGate({ ...candidate, signatureStatus }, expected).ok).toBe(false)
+    }
+  })
+
+  it('rejects wrong identity, publisher, version, missing pin, and out-of-range version', () => {
+    expect(unsignedCandidateGate({ ...candidate, packageName: 'Other.Name' }, expected).ok).toBe(false)
+    expect(unsignedCandidateGate({ ...candidate, publisher: 'CN=Other' }, expected).ok).toBe(false)
+    expect(unsignedCandidateGate(candidate, { ...expected, expectedVersion: '26.922.0.1404' }).ok).toBe(false)
+    expect(unsignedCandidateGate(candidate, { expectedSubject: '' }).ok).toBe(false)
+    expect(unsignedCandidateGate({ ...candidate, version: '26.922.0.65536' }, { expectedSubject: SUBJECT }).ok).toBe(false)
+  })
+})
+
 describe('signatureGate', () => {
+  const expected = { expectedThumbprint: THUMB, expectedSubject: SUBJECT }
+
   it('demands Authenticode Valid', () => {
-    expect(signatureGate({ status: 'Valid' }, { expectedThumbprint: null, expectedSubject: null }).ok).toBe(true)
+    expect(signatureGate({ status: 'Valid', thumbprint: THUMB, subject: SUBJECT }, expected).ok).toBe(true)
     for (const status of ['NotSigned', 'NotTrusted', 'HashMismatch', 'UnknownError']) {
-      const verdict = signatureGate({ status }, { expectedThumbprint: null, expectedSubject: null })
+      const verdict = signatureGate({ status, thumbprint: THUMB, subject: SUBJECT }, expected)
       expect(verdict.ok).toBe(false)
       expect(verdict.reason).toContain(status)
     }
-    expect(signatureGate(null, { expectedThumbprint: null, expectedSubject: null }).ok).toBe(false)
+    expect(signatureGate(null, expected).ok).toBe(false)
   })
 
   it('checks the thumbprint case-insensitively and exactly', () => {
-    expect(signatureGate({ status: 'Valid', thumbprint: THUMB.toUpperCase() }, { expectedThumbprint: THUMB, expectedSubject: null }).ok).toBe(true)
-    const bad = signatureGate({ status: 'Valid', thumbprint: 'b'.repeat(40) }, { expectedThumbprint: THUMB, expectedSubject: null })
+    expect(signatureGate({ status: 'Valid', thumbprint: THUMB.toUpperCase(), subject: SUBJECT }, expected).ok).toBe(true)
+    const bad = signatureGate({ status: 'Valid', thumbprint: 'b'.repeat(40), subject: SUBJECT }, expected)
     expect(bad.ok).toBe(false)
-    const missing = signatureGate({ status: 'Valid', thumbprint: null }, { expectedThumbprint: THUMB, expectedSubject: null })
+    const missing = signatureGate({ status: 'Valid', thumbprint: null, subject: SUBJECT }, expected)
     expect(missing.ok).toBe(false)
   })
 
-  it('refuses a Subject that differs from the configured expectation', () => {
+  it('requires fixed expected pins and refuses a Subject that differs', () => {
+    expect(signatureGate({ status: 'Valid', thumbprint: THUMB, subject: SUBJECT }, { expectedThumbprint: null, expectedSubject: SUBJECT }).ok).toBe(false)
+    expect(signatureGate({ status: 'Valid', thumbprint: THUMB, subject: SUBJECT }, { expectedThumbprint: THUMB, expectedSubject: null }).ok).toBe(false)
     const verdict = signatureGate(
-      { status: 'Valid', subject: 'CN=Someone Else' },
-      { expectedThumbprint: null, expectedSubject: SUBJECT }
+      { status: 'Valid', thumbprint: THUMB, subject: 'CN=Someone Else' },
+      expected
     )
     expect(verdict.ok).toBe(false)
   })

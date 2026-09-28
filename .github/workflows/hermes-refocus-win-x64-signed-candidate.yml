@@ -1,53 +1,14 @@
-# Hermes Refocus — Windows x64 SIGNED canary candidate (NO publishing, NO feed).
-#
-# SIBLING of hermes-refocus-win-x64-candidate.yml (the unsigned lane). This
-# file is NEW and was never dispatched from this session: the first dispatch
-# is the real test. Nothing here publishes — no releases, no R2 feed, no
-# App Installer — and the artifact remains a PUBLIC run artifact of a public
-# fork (built from public code; "artifact" is not "private").
-#
-# What is different from the unsigned lane:
-#   1. GitHub Environment `refocus-signed-canary` (intended to be created
-#      with required reviewers, so only an approved dispatch can reach the
-#      secret). If the environment does not exist yet, GitHub fails the job
-#      at startup — that is the safe direction; create the environment first.
-#   2. The PFX arrives via repository/action secrets (HERMES_MSIX_PFX_B64 +
-#      HERMES_MSIX_PFX_PASSWORD), is decoded to a runner-temp path that is
-#      NEVER echoed, logged or committed, and is deleted in an always()-
-#      running cleanup step. Signtool receives the password through an
-#      environment variable read inside the step, never inline.
-#   3. The build source is admitted by apps/desktop/scripts/refocus-signed-
-#      admission.mjs BEFORE the environment/secret job starts: only a commit
-#      that is real ancestry of `origin/refocus/mis-perfiles` in THIS fork,
-#      checked out by exact SHA, may reach the signing step. No PR refs, no
-#      arbitrary SHAs, no fork-checkout shortcuts.
-#   4. Signed builds are installable on machines that trust the cert: the
-#      manifest Publisher is the EXACT certificate Subject (validated by
-#      product-identity.cjs via HERMES_MSIX_PUBLISHER — a signed build
-#      without it fails at identity require time) and the post-build gate
-#      demands Authenticode Valid chained to a trusted root (the self-signed
-#      root must be imported into THIS laptop's Trusted Root store only).
-#
-# Secret exposure surface, explicitly:
-#   - the secret exists only inside the `signed-canary-build` job of this
-#     workflow, gated by the protected environment;
-#   - it never enters `${{ }}` expressions beyond `secrets.X` -> `env:` at
-#     step level (GitHub masks any accidental echo; the steps never echo it
-#     anyway), never the job summary, never an artifact, never a cache;
-#   - the PFX file is unlinked in a step that runs `if: always()`, so a
-#     failed gate still cleans it up; the runner itself is ephemeral.
-#
-# Untested: this workflow has never executed. The first dispatch is the real
-# test, and the environment + secrets must be configured by the repository
-# owner BEFORE any dispatch (see the checklist in the job summary).
-
-name: Hermes Refocus Windows x64 signed canary
+# Hermes Refocus signed candidate lane — deliberately DISABLED until external gates below are verified.
+# Never publish: the signed MSIX is a public run artifact in this public fork.
+# The build job executes candidate code and has no signing credentials. The signer
+# job does not checkout the candidate repository or run any candidate-provided code.
+name: Hermes Refocus Windows x64 signed candidate
 
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Full 40-character commit SHA on the mis-perfiles branch to build
+        description: Full 40-character commit SHA on refocus/mis-perfiles
         required: true
         type: string
 
@@ -55,305 +16,209 @@ permissions:
   contents: read
 
 concurrency:
-  group: hermes-refocus-win-x64-signed-${{ inputs.ref }}
+  group: hermes-refocus-signed-${{ inputs.ref }}
   cancel-in-progress: false
 
 jobs:
-  signed-canary-admission:
-    name: Admit the build source (no secrets here)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    # Deliberately NO environment: this job must be able to prove ancestry
-    # without holding any secret.
-    outputs:
-      sha: ${{ steps.admit.outputs.sha }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: refocus/mis-perfiles
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Admit the exact commit (branch ancestry, fail closed)
-        id: admit
-        shell: bash
-        env:
-          BUILD_SHA: ${{ inputs.ref }}
-        run: |
-          set -euo pipefail
-          # The admission script checks out nothing and touches nothing: it
-          # verifies the SHA is real ancestry of origin/refocus/mis-perfiles
-          # in this checkout of THIS fork, then pins it as the job output.
-          node apps/desktop/scripts/refocus-signed-admission.mjs "$BUILD_SHA" origin/refocus/mis-perfiles "$PWD"
-          echo "sha=$BUILD_SHA" >> "$GITHUB_OUTPUT"
-
-  signed-canary-build:
-    name: Hermes Refocus MSIX (windows x64, SIGNED, artifact only)
-    needs: signed-canary-admission
+  build-candidate:
+    name: Build unsigned candidate (NO signing secrets)
+    if: github.ref == 'refs/heads/main' && github.workflow_ref == format('{0}/.github/workflows/hermes-refocus-win-x64-signed-candidate.yml@refs/heads/main', github.repository)
     runs-on: windows-latest
     timeout-minutes: 600
-    # The protected environment is the secret's ONLY door. Create it with
-    # required reviewers before dispatching; a missing environment fails
-    # the job before any step runs.
-    environment: refocus-signed-canary
     permissions:
       contents: read
+    outputs:
+      epoch: ${{ steps.epoch.outputs.value }}
     env:
-      BUILD_SHA: ${{ needs.signed-canary-admission.outputs.sha }}
+      BUILD_SHA: ${{ inputs.ref }}
       CLOUDFLARE_R2_PUBLIC_URL: ''
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          # The admitted SHA from the admission job — never a mutable ref.
-          ref: ${{ needs.signed-canary-admission.outputs.sha }}
+          ref: ${{ inputs.ref }}
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Confirm the checkout is exactly the admitted commit
+      - name: Admit exact candidate ancestry (no secrets)
         shell: bash
         run: |
           set -euo pipefail
-          checked="$(git rev-parse HEAD)"
-          if [ "$checked" != "$BUILD_SHA" ]; then
-            echo "::error::checkout resolved to $checked, not the admitted $BUILD_SHA"
-            exit 1
-          fi
-          echo "building admitted commit $BUILD_SHA"
-
-      - name: Fail closed if Trusted Signing credentials leak into this lane
-        shell: bash
-        env:
-          AZURE_SIGN_ENDPOINT: ${{ vars.AZURE_SIGN_ENDPOINT }}
-          AZURE_SIGN_ACCOUNT: ${{ vars.AZURE_SIGN_ACCOUNT }}
-          AZURE_SIGN_PROFILE: ${{ vars.AZURE_SIGN_PROFILE }}
-          AZURE_SIGN_PUBLISHER: ${{ vars.AZURE_SIGN_PUBLISHER }}
-          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-        run: |
-          set -euo pipefail
-          present=""
-          for name in AZURE_SIGN_ENDPOINT AZURE_SIGN_ACCOUNT AZURE_SIGN_PROFILE AZURE_SIGN_PUBLISHER AZURE_CLIENT_ID AZURE_TENANT_ID; do
-            [ -n "${!name}" ] && present="$present $name"
-          done
-          if [ -n "$present" ]; then
-            echo "::error::Azure Trusted Signing vars are set but this lane signs with a PFX secret. Unset them and re-run."
-            exit 1
-          fi
-
-      # The secret's only materialization: a file in $RUNNER_TEMP, never in
-      # the workspace (which could ride into a cache or artifact glob), and
-      # the path is exported WITHOUT ever being printed.
-      - name: Stage the PFX secret to the runner (never logged)
-        shell: pwsh
-        env:
-          HERMES_MSIX_PFX_B64: ${{ secrets.HERMES_MSIX_PFX_B64 }}
-          HERMES_MSIX_PFX_PASSWORD: ${{ secrets.HERMES_MSIX_PFX_PASSWORD }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ([string]::IsNullOrWhiteSpace($env:HERMES_MSIX_PFX_B64)) {
-            Write-Output "::error::secret HERMES_MSIX_PFX_B64 is not set; refusing to run the signed lane without its certificate"
-            exit 1
-          }
-          $pfx = Join-Path $env:RUNNER_TEMP ("refocus-signing-{0}.pfx" -f [guid]::NewGuid().ToString('N'))
-          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:HERMES_MSIX_PFX_B64))
-          # Export ONLY the path — never the bytes, never the password.
-          "HERMES_MSIX_PFX_PATH=$pfx" | Add-Content $env:GITHUB_ENV
-
-      - name: Fail closed unless the signing secrets are coherent (pre-flight)
-        shell: bash
-        env:
-          HERMES_MSIX_PFX_PATH: ${{ env.HERMES_MSIX_PFX_PATH }}
-          HERMES_MSIX_PFX_PASSWORD: ${{ secrets.HERMES_MSIX_PFX_PASSWORD }}
-          HERMES_MSIX_PUBLISHER: ${{ secrets.HERMES_MSIX_PUBLISHER }}
-        run: |
-          set -euo pipefail
-          # Pure Node, no git: validates secret coherence (path present,
-          # password present, publisher is a real Subject — never the
-          # provisional one) and exits 1 without printing any secret value.
-          node apps/desktop/scripts/refocus-signed-gates-cli.mjs secret-admission
-
-      - name: Pin the release epoch (one build clock for the job)
+          [[ "$BUILD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::ref must be lowercase full 40-character SHA'; exit 1; }
+          test "$(git rev-parse HEAD)" = "$BUILD_SHA"
+          git fetch --no-tags origin refocus/mis-perfiles:refs/remotes/origin/refocus/mis-perfiles
+          git merge-base --is-ancestor "$BUILD_SHA" origin/refocus/mis-perfiles || { echo '::error::candidate is not admitted branch ancestry'; exit 1; }
+          echo "admitted candidate $BUILD_SHA"
+      - name: Pin package build epoch
+        id: epoch
         shell: bash
         run: |
           set -euo pipefail
           epoch="$(date -u +%s)"
-          if ! [[ "$epoch" =~ ^[0-9]+$ ]]; then
-            echo "::error::could not pin a numeric release epoch (got: '$epoch')"
-            exit 1
-          fi
+          [[ "$epoch" =~ ^[0-9]+$ ]]
           echo "HERMES_RELEASE_EPOCH=$epoch" >> "$GITHUB_ENV"
-          echo "pinned HERMES_RELEASE_EPOCH=$epoch"
-
-      - name: Resolve the bootstrap Python (>= 3.11 for tomllib)
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+          echo "value=$epoch" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.13'
-
-      - name: Prepare the desktop build (refocus variant, commit identity)
+      - name: Prepare unsigned Refocus build
         shell: bash
         env:
           HERMES_DESKTOP_VARIANT: refocus
           HERMES_BUILD_COMMIT: ${{ env.BUILD_SHA }}
-          HERMES_MSIX_PUBLISHER: ${{ secrets.HERMES_MSIX_PUBLISHER }}
           HERMES_RELEASE_EPOCH: ${{ env.HERMES_RELEASE_EPOCH }}
+          # Public variable is only a build input; signer compares it to a hard-coded pin.
+          HERMES_MSIX_PUBLISHER: ${{ vars.REFOCUS_MSIX_EXPECTED_SUBJECT }}
           ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
           PYTHONUTF8: '1'
         run: |
           set -euo pipefail
-          python scripts/bundles/desktop.py --commit "$HERMES_BUILD_COMMIT" --variant refocus \
-            --prepare-only --work "$RUNNER_TEMP/desktop-job" --cache "$RUNNER_TEMP/desktop-inputs"
-
-      - name: Build and package the SIGNED candidate MSIX
+          test -n "$HERMES_MSIX_PUBLISHER" || { echo '::error::expected certificate subject variable is unset'; exit 1; }
+          python scripts/bundles/desktop.py --commit "$HERMES_BUILD_COMMIT" --variant refocus --prepare-only --work "$RUNNER_TEMP/desktop-job" --cache "$RUNNER_TEMP/desktop-inputs"
+      - name: Package unsigned candidate
         shell: bash
         env:
           HERMES_DESKTOP_VARIANT: refocus
           HERMES_BUILD_COMMIT: ${{ env.BUILD_SHA }}
-          # The exact certificate Subject — product-identity.cjs REQUIRES it
-          # on a signed build (refocusSignedBuild true via the win.sign hook
-          # wiring below) and refuses the provisional publisher.
-          HERMES_MSIX_PUBLISHER: ${{ secrets.HERMES_MSIX_PUBLISHER }}
           HERMES_RELEASE_EPOCH: ${{ env.HERMES_RELEASE_EPOCH }}
+          HERMES_MSIX_PUBLISHER: ${{ vars.REFOCUS_MSIX_EXPECTED_SUBJECT }}
           ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
           PYTHONUTF8: '1'
         run: |
           set -euo pipefail
           python scripts/bundles/desktop.py --prepared "$RUNNER_TEMP/desktop-job/prepared.json" --variant refocus
-
-      - name: Verify the candidate identity and package version (fail closed)
-        shell: bash
-        env:
-          # The verify script re-evaluates product-identity.cjs, which on a
-          # signed build demands the real publisher. Provisional here = fail.
-          HERMES_MSIX_PUBLISHER: ${{ secrets.HERMES_MSIX_PUBLISHER }}
-          HERMES_MSIX_PFX_PATH: ${{ env.HERMES_MSIX_PFX_PATH }}
-        run: |
-          set -euo pipefail
-          if [ -z "${HERMES_MSIX_PFX_PATH:-}" ]; then
-            echo "::error::no staged PFX — the signed lane must not fall back to an unsigned build"
-            exit 1
-          fi
-          node apps/desktop/scripts/refocus-verify-candidate.mjs "$BUILD_SHA"
-
-      - name: Verify the SIGNED MSIX (signature, identity, exact version)
-        id: verify
-        shell: pwsh
-        env:
-          HERMES_MSIX_PFX_PASSWORD: ${{ secrets.HERMES_MSIX_PFX_PASSWORD }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $msix = Get-ChildItem "apps/desktop/release" -Filter "HermesRefocus*.msix" |
-            Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if (-not $msix) {
-            $found = Get-ChildItem "apps/desktop/release" -File | Select-Object -ExpandProperty Name
-            Write-Output "::error::no HermesRefocus*.msix in apps/desktop/release; found: $($found -join ', ')"
-            exit 1
-          }
-          Write-Output "candidate: $($msix.Name) ($([math]::Round($msix.Length/1MB,1)) MB)"
-          "CANDIDATE_NAME=$($msix.Name)"   | Add-Content $env:GITHUB_ENV
-          "CANDIDATE_PATH=$($msix.FullName)" | Add-Content $env:GITHUB_ENV
-
-          # --- Authenticode gate: Valid, and chained to a trusted root. ---
-          # On this self-signed lane the root is trusted ONLY because the
-          # laptop that will install the package imported it into its own
-          # Trusted Root store; a runner sees NotTrusted and that is a
-          # failure, so the runner imports the ROOT (never the leaf PFX
-          # key material) into the ephemeral runner's Root store purely to
-          # make chain building possible, then the gate demands Valid.
-          $pw = ConvertTo-SecureString $env:HERMES_MSIX_PFX_PASSWORD -AsPlainText -Force
-          $cert = New-Object Security.Cryptography.X509Certificates.X509Certificate2($env:HERMES_MSIX_PFX_PATH, $pw)
-          $leaf = $cert
-          # Walk to the self-signed root (self-issued by Subject==Issuer).
-          $root = $cert
-          while (-not ($root.Subject -eq $root.Issuer)) {
-            $chain = New-Object Security.Cryptography.X509Certificates.X509Chain
-            $null = $chain.Build($root)
-            $next = $chain.ChainElements | Select-Object -Skip 1 -First 1
-            if (-not $next) { break }
-            $root = $next.Certificate
-          }
-          $store = New-Object Security.Cryptography.X509Certificates.X509Store('Root', 'LocalMachine')
-          $store.Open('ReadWrite')
-          $store.Add($root)
-          $store.Close()
-          Write-Output "imported root subject: $($root.Subject) (runner-local, ephemeral)"
-
-          $sig = Get-AuthenticodeSignature $msix.FullName
-          Write-Output "signature status: $($sig.Status)"
-          if ($sig.Status -ne 'Valid') {
-            Write-Output "::error::expected Authenticode Valid on the signed candidate, got $($sig.Status)"
-            exit 1
-          }
-          $leafInfo = "Subject=$($sig.SignerCertificate.Subject)`nThumbprint=$($sig.SignerCertificate.Thumbprint)"
-          $leafInfo | Set-Content "$env:RUNNER_TEMP/leaf-cert-info.txt"
-
-          # --- Manifest identity gate (pure logic in refocus-signed-gates.mjs). ---
-          $null = New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/msix-inspect"
-          Copy-Item $msix.FullName "$env:RUNNER_TEMP/msix-inspect/candidate.zip"
-          Expand-Archive "$env:RUNNER_TEMP/msix-inspect/candidate.zip" "$env:RUNNER_TEMP/msix-inspect/x"
-          [xml]$manifest = Get-Content "$env:RUNNER_TEMP/msix-inspect/x/AppxManifest.xml"
-          $identity = $manifest.Package.Identity
-          $expected = node -e "import('./scripts/msix-shared.mjs').then(m => console.log(m.canaryPackageVersionAt(Number(process.argv[1]))))" "$env:HERMES_RELEASE_EPOCH"
-          if ($LASTEXITCODE -ne 0 -or -not $expected) {
-            Write-Output "::error::could not recompute the expected package quad from the pinned HERMES_RELEASE_EPOCH ('$env:HERMES_RELEASE_EPOCH'); refusing to pass the gate on an unknown expectation"
-            exit 1
-          }
-          $gates = node apps/desktop/scripts/refocus-signed-gates-cli.mjs manifest-gate `
-            --publisher "$($identity.Publisher)" --name "$($identity.Name)" --version "$($identity.Version)" `
-            --cert-subject "$($sig.SignerCertificate.Subject)" --expected-version "$($expected.Trim())"
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-          Write-Output $gates
-          Write-Output "identity: $($identity.Name) $($identity.Version) publisher=$($identity.Publisher)"
-
-      - name: Upload the SIGNED candidate artifact (public run artifact — NOT a release)
+      - name: Upload unsigned package as data only
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: hermes-refocus-win-x64-signed-${{ needs.signed-canary-admission.outputs.sha }}
-          path: ${{ env.CANDIDATE_PATH }}
+          name: hermes-refocus-unsigned-${{ env.BUILD_SHA }}
+          path: apps/desktop/release/HermesRefocus*.msix
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
 
-      - name: Shred the staged PFX (runs even on gate failure)
-        if: always()
+  sign-candidate:
+    name: Validate data then sign (protected, fail-closed)
+    needs: build-candidate
+    # The branch/ref checks prevent a feature-branch or PR workflow from ever
+    # attaching the environment/secrets. Repository variables are an additional
+    # administrative OFF switch; unset by default. They do NOT prove protection.
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.workflow_ref == format('{0}/.github/workflows/hermes-refocus-win-x64-signed-candidate.yml@refs/heads/main', github.repository) &&
+      vars.REFOCUS_SIGNING_ENABLED == 'I_VERIFIED_ENVIRONMENT_AND_BRANCH_PROTECTION'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    environment: refocus-signed-canary
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      # No checkout, no Node/Python/package scripts, and no tools from the candidate artifact.
+      - name: Download this run's exact build artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: hermes-refocus-unsigned-${{ inputs.ref }}
+          path: ${{ runner.temp }}/candidate
+      - name: Refuse unpinned certificate configuration before secret use
         shell: pwsh
-        run: |
-          $ErrorActionPreference = 'SilentlyContinue'
-          if ($env:HERMES_MSIX_PFX_PATH -and (Test-Path $env:HERMES_MSIX_PFX_PATH)) {
-            Remove-Item -Force $env:HERMES_MSIX_PFX_PATH
-            Write-Output "staged PFX deleted from the ephemeral runner"
-          }
-
-      - name: Job summary — what this is and what it is not
-        if: always()
-        shell: bash
         env:
-          BUILD_SHA_OK: ${{ needs.signed-canary-admission.outputs.sha }}
+          PINNED_THUMBPRINT: 'SET_FIXED_40_HEX_CERT_THUMBPRINT_BEFORE_ENABLE'
+          PINNED_SUBJECT: 'SET_FIXED_EXACT_CERT_SUBJECT_BEFORE_ENABLE'
+          CONFIGURED_SUBJECT: ${{ vars.REFOCUS_MSIX_EXPECTED_SUBJECT }}
         run: |
-          {
-            echo "## Hermes Refocus — Windows x64 SIGNED canary candidate"
-            echo ""
-            echo "| fact | value |"
-            echo "|---|---|"
-            echo "| commit | \`${BUILD_SHA_OK}\` |"
-            echo "| variant | \`refocus\` (commit-stamped, product-stable) |"
-            echo "| candidate | \`${CANDIDATE_NAME:-none}\` |"
-            echo "| signed | **yes** — PFX from the protected environment \`refocus-signed-canary\` |"
-            echo "| published | **nothing** — run artifact only; no feed, no App Installer |"
-            echo "| artifact visibility | **PUBLIC** — this fork is a public repository; anyone can download the artifact from this run. It is built from public code and contains no secrets, but it is not a private artifact. |"
-            echo ""
-            echo "### Trust story (single laptop)"
-            echo "- The signing cert is self-signed (no commercial CA). The"
-            echo "  package installs ONLY on machines whose Trusted Root store"
-            echo "  contains this cert's self-signed root — i.e. your one"
-            echo "  laptop. Every other machine sees NotTrusted."
-            echo "- Import the ROOT certificate (never the PFX) into the"
-            echo "  laptop's LocalMachine\\\\Root store once; then plain"
-            echo "  \`Add-AppxPackage\` works. Uninstall + fresh install applies"
-            echo "  when moving from the provisional unsigned candidate."
-            echo "### Secret hygiene"
-            echo "- The PFX existed only in the ephemeral runner's temp dir,"
-            echo "  was never printed, and was deleted in an always() step."
-            echo "- No feed, no App Installer, no release: distribution is a"
-            echo "  manual artifact download until the E2E gate passes."
-          } >> "$GITHUB_STEP_SUMMARY"
+          $ErrorActionPreference = 'Stop'
+          if ($env:PINNED_THUMBPRINT -notmatch '^[0-9A-Fa-f]{40}$' -or $env:PINNED_SUBJECT -like 'SET_FIXED_*') {
+            throw 'Fixed signer thumbprint/subject pins are unset; signing is disabled.'
+          }
+          if ($env:CONFIGURED_SUBJECT -cne $env:PINNED_SUBJECT) { throw 'Configured build subject does not byte-match fixed signer subject.' }
+      - name: Validate unsigned package data (no code execution)
+        id: package
+        shell: pwsh
+        env:
+          PINNED_SUBJECT: 'SET_FIXED_EXACT_CERT_SUBJECT_BEFORE_ENABLE'
+          CONFIGURED_SUBJECT: ${{ vars.REFOCUS_MSIX_EXPECTED_SUBJECT }}
+          BUILD_EPOCH: ${{ needs.build-candidate.outputs.epoch }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @(Get-ChildItem "$env:RUNNER_TEMP/candidate" -Filter 'HermesRefocus*.msix' -File)
+          if ($files.Count -ne 1) { throw "Expected exactly one MSIX, got $($files.Count)." }
+          $msix = $files[0]
+          $sig = Get-AuthenticodeSignature -LiteralPath $msix.FullName
+          if ($sig.Status -ne 'NotSigned') { throw "Input must be unsigned; status was $($sig.Status)." }
+          $inspect = Join-Path $env:RUNNER_TEMP 'msix-inspect'
+          $zip = Join-Path $env:RUNNER_TEMP 'candidate-inspect.zip'
+          Copy-Item -LiteralPath $msix.FullName -Destination $zip
+          Expand-Archive -LiteralPath $zip -DestinationPath $inspect
+          [xml]$manifest = Get-Content -LiteralPath (Join-Path $inspect 'AppxManifest.xml')
+          $identity = $manifest.Package.Identity
+          if ($identity.Name -cne 'Refocus.HermesRefocus') { throw "Unexpected package Name '$($identity.Name)'." }
+          if ($identity.Publisher -cne $env:PINNED_SUBJECT -or $identity.Publisher -cne $env:CONFIGURED_SUBJECT) { throw 'Package Publisher does not exactly match the pinned subject.' }
+          if ($identity.Version -notmatch '^[1-9][0-9]*\.[0-9]+\.[0-9]+\.[0-9]+$') { throw "Invalid package version '$($identity.Version)'." }
+          if (($identity.Version -split '\.') | Where-Object { [int64]$_ -gt 65535 }) { throw 'Package version component exceeds MSIX 16-bit limit.' }
+          if ($env:BUILD_EPOCH -notmatch '^\d+$') { throw 'Trusted build epoch output is missing.' }
+          $date = [DateTimeOffset]::FromUnixTimeSeconds([int64]$env:BUILD_EPOCH).UtcDateTime
+          $expectedVersion = '{0}.{1}.{2}.{3}' -f ($date.Year % 100), (($date.Month * 100) + $date.Day), $date.Hour, (($date.Minute * 100) + $date.Second)
+          if ($identity.Version -cne $expectedVersion) { throw "Package version '$($identity.Version)' does not match trusted build epoch '$expectedVersion'." }
+          "MSIX=$($msix.FullName)" | Add-Content $env:GITHUB_OUTPUT
+          "VERSION=$($identity.Version)" | Add-Content $env:GITHUB_OUTPUT
+      - name: Sign with the protected PFX (signtool)
+        shell: pwsh
+        env:
+          HERMES_MSIX_PFX_B64: ${{ secrets.HERMES_MSIX_PFX_B64 }}
+          HERMES_MSIX_PFX_PASSWORD: ${{ secrets.HERMES_MSIX_PFX_PASSWORD }}
+          PINNED_THUMBPRINT: 'SET_FIXED_40_HEX_CERT_THUMBPRINT_BEFORE_ENABLE'
+          PINNED_SUBJECT: 'SET_FIXED_EXACT_CERT_SUBJECT_BEFORE_ENABLE'
+          MSIX: ${{ steps.package.outputs.MSIX }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:HERMES_MSIX_PFX_B64) -or [string]::IsNullOrWhiteSpace($env:HERMES_MSIX_PFX_PASSWORD)) { throw 'PFX secrets are missing.' }
+          $pfx = Join-Path $env:RUNNER_TEMP 'refocus-signing.pfx'
+          try {
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:HERMES_MSIX_PFX_B64))
+            $secure = ConvertTo-SecureString $env:HERMES_MSIX_PFX_PASSWORD -AsPlainText -Force
+            $cert = [Security.Cryptography.X509Certificates.X509Certificate2]::new($pfx, $secure, [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
+            if ($cert.Thumbprint -cne $env:PINNED_THUMBPRINT -or $cert.Subject -cne $env:PINNED_SUBJECT) { throw 'PFX leaf certificate does not match fixed thumbprint and subject pins.' }
+            # Trust only the independently pinned public certificate for this
+            # ephemeral runner's self-signed-chain verification. Never import
+            # the PFX/private key into the machine certificate store.
+            $publicCert = [Security.Cryptography.X509Certificates.X509Certificate2]::new($cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+            $store = [Security.Cryptography.X509Certificates.X509Store]::new('Root', 'LocalMachine')
+            $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            $store.Add($publicCert)
+            $store.Close()
+            $signtool = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin" -Filter signtool.exe -Recurse -ErrorAction Stop | Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if (-not $signtool) { throw 'Windows SDK signtool.exe not found.' }
+            & $signtool.FullName sign /fd SHA256 /f $pfx /p $env:HERMES_MSIX_PFX_PASSWORD /sha1 $env:PINNED_THUMBPRINT $env:MSIX
+            if ($LASTEXITCODE -ne 0) { throw "signtool sign failed with exit code $LASTEXITCODE." }
+            # Independently read back signature status and leaf identity after signing.
+            $result = Get-AuthenticodeSignature -LiteralPath $env:MSIX
+            if ($result.Status -ne 'Valid') { throw "Post-sign Authenticode status was $($result.Status), expected Valid." }
+            if (-not $result.SignerCertificate -or $result.SignerCertificate.Thumbprint -cne $env:PINNED_THUMBPRINT -or $result.SignerCertificate.Subject -cne $env:PINNED_SUBJECT) { throw 'Post-sign signer certificate does not match fixed thumbprint and subject.' }
+            & $signtool.FullName verify /pa /all /v $env:MSIX
+            if ($LASTEXITCODE -ne 0) { throw "signtool verify failed with exit code $LASTEXITCODE." }
+            "Signed package and verified fixed signer $($result.SignerCertificate.Subject)."
+          } finally {
+            Remove-Item -LiteralPath $pfx -Force -ErrorAction SilentlyContinue
+            Remove-Item Env:HERMES_MSIX_PFX_B64 -ErrorAction SilentlyContinue
+            Remove-Item Env:HERMES_MSIX_PFX_PASSWORD -ErrorAction SilentlyContinue
+          }
+      - name: Upload signed artifact only (no publishing)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hermes-refocus-signed-${{ inputs.ref }}
+          path: ${{ steps.package.outputs.MSIX }}
+          if-no-files-found: error
+          retention-days: 3
+
+# REQUIRED before enabling (currently impossible and intentionally gated OFF):
+# 1. Protect default branch `main`; restrict .github/workflows changes to trusted reviewers.
+# 2. Create `refocus-signed-canary` in repository Settings with required independent
+#    reviewers, prevent self-review, restrict deployment refs to main, disable bypass.
+# 3. Verify that protection via admin UI/API; then set repository variable
+#    REFOCUS_SIGNING_ENABLED=I_VERIFIED_ENVIRONMENT_AND_BRANCH_PROTECTION.
+# 4. Obtain the real signing certificate, independently verify it, replace BOTH
+#    SET_FIXED_* literals with the exact SHA-1 thumbprint and exact Subject in a
+#    reviewed default-branch commit. Set REFOCUS_MSIX_EXPECTED_SUBJECT to that
+#    exact subject. Add HERMES_MSIX_PFX_B64 and HERMES_MSIX_PFX_PASSWORD only
+#    as environment secrets on refocus-signed-canary.
+# GitHub Actions cannot prove a named environment has required reviewers from
+# YAML alone; the explicit unset-by-default variable is an administrative gate,
+# not a cryptographic guarantee. Do not set it until every external check passes.
+# This workflow remains unactivated: do not dispatch, add secrets, or import certs.
