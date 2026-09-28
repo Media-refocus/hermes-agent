@@ -117,25 +117,27 @@ if (refocus && !buildCommitEnv) {
 const REFOCUS_PUBLISHER_ENV = 'HERMES_MSIX_PUBLISHER'
 const PROVISIONAL_REFOCUS_PUBLISHER = 'CN=Refocus Development'
 const refocusSignedBuild = Boolean(process.env.AZURE_SIGN_ENDPOINT || process.env.AZURE_CLIENT_ID)
-let refocusPublisher = (process.env[REFOCUS_PUBLISHER_ENV] || '').trim()
-if (refocusPublisher) {
-  if (!/^CN=../.test(refocusPublisher)) {
-    throw new Error(`${REFOCUS_PUBLISHER_ENV} must be a distinguished name starting with CN=, got ${JSON.stringify(refocusPublisher)}`)
+let refocusPublisher
+if (refocus) {
+  refocusPublisher = (process.env[REFOCUS_PUBLISHER_ENV] || '').trim()
+  if (refocusPublisher) {
+    if (!/^CN=../.test(refocusPublisher)) {
+      throw new Error(`${REFOCUS_PUBLISHER_ENV} must be a distinguished name starting with CN=, got ${JSON.stringify(refocusPublisher)}`)
+    }
+    if (/nous/i.test(refocusPublisher)) {
+      throw new Error(`${REFOCUS_PUBLISHER_ENV} must be a Refocus identity, never a Nous one (got ${JSON.stringify(refocusPublisher)})`)
+    }
+    if (/[<>&'"\r\n]/.test(refocusPublisher)) {
+      throw new Error(`${REFOCUS_PUBLISHER_ENV} contains characters unsafe for the MSIX XML Publisher attribute`)
+    }
+  } else {
+    // An installable build requires the exact certificate Subject. An unsigned
+    // verification-only candidate may use the provisional publisher.
+    if (refocusSignedBuild) {
+      throw new Error(`A signed refocus build requires ${REFOCUS_PUBLISHER_ENV} set to the exact Subject of the signing certificate; without it Windows refuses install and update (0x8007000B)`)
+    }
+    refocusPublisher = PROVISIONAL_REFOCUS_PUBLISHER
   }
-  if (/nous/i.test(refocusPublisher)) {
-    throw new Error(`${REFOCUS_PUBLISHER_ENV} must be a Refocus identity, never a Nous one (got ${JSON.stringify(refocusPublisher)})`)
-  }
-  if (refocusPublisher.includes("'")) {
-    throw new Error(`${REFOCUS_PUBLISHER_ENV} must not contain single quotes: the manifest template quotes the Publisher value`)
-  }
-} else {
-  // Build gate: an INSTALLABLE (signed) build must name the certificate
-  // Subject it will be signed with — only the explicitly non-installable
-  // unsigned candidates may ride the provisional publisher.
-  if (refocusSignedBuild) {
-    throw new Error(`A signed (installable) refocus build requires ${REFOCUS_PUBLISHER_ENV} set to the exact Subject of the signing certificate; without it the manifest can never match the cert and Windows refuses install and update (0x8007000B)`)
-  }
-  refocusPublisher = PROVISIONAL_REFOCUS_PUBLISHER
 }
 
 /** @typedef {import("./product-identity.d.cts")} ProductIdentity */

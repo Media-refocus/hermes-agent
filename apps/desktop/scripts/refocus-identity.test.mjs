@@ -131,7 +131,7 @@ test('the refocus publisher env rejects Nous identities and template-breaking qu
   )
   assert.throws(
     () => identityFor({ HERMES_DESKTOP_VARIANT: 'refocus', HERMES_BUILD_COMMIT: COMMIT_A, HERMES_MSIX_PUBLISHER: "CN=Refocus, O='X'" }),
-    /single quotes/
+    /unsafe for the MSIX XML Publisher attribute/
   )
   assert.throws(
     () => identityFor({ HERMES_DESKTOP_VARIANT: 'refocus', HERMES_BUILD_COMMIT: COMMIT_A, HERMES_MSIX_PUBLISHER: 'Refocus SL' }),
@@ -150,6 +150,12 @@ test('official variants never carry the refocus publisher or the Refocus namespa
     assert.equal(official.msixPublisher, undefined, `${env.HERMES_DESKTOP_VARIANT || '(default)'} must not carry a refocus publisher`)
     assert.equal(official.msixAppIdWithOrg.startsWith('NousResearch.'), true)
   }
+})
+
+test('official signing environments never trigger the refocus certificate gate', () => {
+  const official = identityFor({ HERMES_DESKTOP_VARIANT: 'bundled', AZURE_SIGN_ENDPOINT: 'https://sts.example', AZURE_CLIENT_ID: 'client' })
+  assert.equal(official.msixPublisher, undefined)
+  assert.equal(official.msixAppIdWithOrg, 'NousResearch.HermesBundled')
 })
 
 test('refocus markers disagree with every official identity on all OS markers', () => {
