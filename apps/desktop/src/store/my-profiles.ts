@@ -152,7 +152,9 @@ export async function loadMyProfiles(
         const requested = Math.min(Math.max(initialLimit, 1), SIDEBAR_RECENTS_CAP)
         const truncated = first.recents.profiles_truncated?.[route.profile] ?? rows.length >= requested
         let incomplete = truncated
-        let offset = rows.length
+        // The batched endpoint may append old pins beyond its SQL LIMIT.
+        // Offset is the requested SQL window, never the deduplicated response.
+        let offset = requested
 
         if (truncated) {
           while (rows.length < MAX_ROUTES) {
@@ -163,11 +165,12 @@ export async function loadMyProfiles(
             })
 
             appendDeduped(rows, seen, page.sessions)
-            offset += page.sessions.length
-
-            // A short page is the end of the list. page.sessions can exceed
-            // the page itself (pinned back-fill), so `total` — the server's
-            // own count under the same filters — is the authoritative stop.
+            // `include_pinned` may append old pinned rows outside the
+            // requested LIMIT window. Advance by the DB window, not the
+            // response length, or each repeated pin skips an ordinary row.
+            offset += PAGE_SIZE
+            // `total` counts the SQL-scoped rows; pinned back-fill can make a
+            // short SQL page look full, so the server count is the stop guard.
             if (page.sessions.length < PAGE_SIZE || (page.total ?? 0) <= offset) {
               incomplete = false
               break
@@ -193,12 +196,12 @@ export async function loadMyProfiles(
   )
   if (generation === refreshGeneration) {
     $myProfilesGatewayErrors.set(
-      results.flatMap(result =>
+      results.flatMap((result, index) =>
         result.error
           ? [
               {
                 connectionId: result.connectionId,
-                profile: routes.find(route => route.connectionId === result.connectionId)?.profile ?? 'default',
+                profile: routes[index].profile,
                 message: result.error
               }
             ]
@@ -206,12 +209,12 @@ export async function loadMyProfiles(
       )
     )
     $myProfilesIncomplete.set(
-      results.flatMap(result =>
+      results.flatMap((result, index) =>
         result.incomplete
           ? [
               {
                 connectionId: result.connectionId,
-                profile: routes.find(route => route.connectionId === result.connectionId)?.profile ?? 'default'
+                profile: routes[index].profile
               }
             ]
           : []

@@ -181,6 +181,41 @@ describe('my-profiles recents pagination', () => {
     expect(result.sessions).toHaveLength(601)
   })
 
+  it('uses the requested initial SQL window as offset even when pinned back-fill adds a row', async () => {
+    const first = Array.from({ length: 500 }, (_, i) => `s${i}`)
+    listSidebarSessions.mockResolvedValue(sidebarPage([...first, 'old-pin'], 'default', true))
+    listRouteSessionsPage.mockResolvedValue({
+      sessions: Array.from({ length: 50 }, (_, i) => ({ id: `s${500 + i}`, profile: 'default' })),
+      total: 550,
+      limit: 100,
+      offset: 500
+    })
+    const [result] = await loadMyProfiles({ routes: [{ connectionId: 'gw-a', profile: 'default' }], limit: 500 })
+    expect(listRouteSessionsPage.mock.calls[0][1].offset).toBe(500)
+    expect(result.sessions.map(session => session.id)).toContain('s500')
+    expect(result.sessions.map(session => session.id)).toContain('s549')
+  })
+
+  it('does not skip ordinary rows when an old pinned row is appended on every page', async () => {
+    const atCap = Array.from({ length: 500 }, (_, i) => `s${i}`)
+    listSidebarSessions.mockResolvedValue(sidebarPage(atCap, 'default', true))
+    listRouteSessionsPage.mockImplementation(async (_route: unknown, { offset }: { offset: number }) => ({
+      sessions: [
+        { id: 'pinned', profile: 'default' },
+        ...Array.from({ length: Math.min(100, 750 - offset) }, (_, i) => ({ id: `s${offset + i}`, profile: 'default' }))
+      ],
+      total: 750,
+      limit: 100,
+      offset
+    }))
+    const [result] = await loadMyProfiles({ routes: [{ connectionId: 'gw-a', profile: 'default' }], limit: 650 })
+    expect(listRouteSessionsPage.mock.calls.map(([, opts]) => opts.offset)).toEqual([500, 600, 700])
+    expect(result.sessions).toHaveLength(751)
+    expect(result.sessions.some(session => session.id === 's600')).toBe(true)
+    expect(result.sessions.some(session => session.id === 's749')).toBe(true)
+    expect(result.incomplete).toBeUndefined()
+  })
+
   it('warns «lista incompleta» when the profile exceeds the hard bound, isolated per route', async () => {
     const atCap = Array.from({ length: 500 }, (_, i) => ({ id: `a${i}`, profile: 'default' }))
     listSidebarSessions.mockImplementation(async request =>
