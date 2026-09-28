@@ -184,7 +184,7 @@ function main() {
     )
   }
 
-  const bundled = ['bundled', 'store'].includes(process.env.HERMES_DESKTOP_VARIANT)
+  const bundled = ['bundled', 'store', 'refocus'].includes(process.env.HERMES_DESKTOP_VARIANT)
   const payload = bundled
     ? stageDesktopLaunchers(join(OUT_DIR, 'agent-payload'))
     : null
@@ -250,17 +250,22 @@ export function buildStampPayload(stamp, env = process.env, platform = process.p
     bootstrap: 'self',
     store: 'microsoft-store',
     bundled: { win32: 'app-installer', darwin: 'electron-updater' }[platform] || 'external',
-    light: platform === 'darwin' ? 'electron-updater' : 'external'
+    light: platform === 'darwin' ? 'electron-updater' : 'external',
+    // A refocus bundle has no App Installer source: updates are manual by
+    // design, so the runtime must never advertise a check it cannot honor.
+    refocus: 'external'
   }[variant]
   if (!updateMechanism) throw new Error(`Unknown desktop variant: ${variant}`)
   if (channelBuild && updateMechanism === 'external') throw new Error('Channel builds require a supported native update owner')
-  const bundled = variant === 'bundled' || variant === 'store'
+  const bundled = variant === 'bundled' || variant === 'store' || variant === 'refocus'
   if (bundled && !payload?.runtime?.commands?.hermes) {
     throw new Error('PM payload has no completed launch contract; stage the bundle before packaging')
   }
   return {
     ...base,
-    payload: variant === "store" ? "bundled" : variant || "bootstrap",
+    // Refocus tells the full bundled runtime story (payload launch contract)
+    // under its own side-by-side identity; only the update steward differs.
+    payload: variant === "store" || variant === "refocus" ? "bundled" : variant || "bootstrap",
     distribution: "desktop-app",
 
     updateMechanism: commitBuild ? 'external' : updateMechanism,

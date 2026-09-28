@@ -122,7 +122,7 @@ class BuildRequest:
             bundle_env = channel_request["bundleEnv"]
         if variant == "store" and (commit or not tag or channel_for_tag(tag) != "stable"):
             raise ValueError("Store packaging requires a stable release tag")
-        if variant not in {"bundled", "store", "light"}:
+        if variant not in {"bundled", "store", "light", "refocus"}:
             raise ValueError("invalid desktop variant")
         if bool(tag) == bool(commit):
             raise ValueError("exactly one of --tag or --commit is required")

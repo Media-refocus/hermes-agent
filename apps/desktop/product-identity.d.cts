@@ -3,6 +3,8 @@ interface ProductIdentity {
   light: boolean
   /** True for a Store-submission build (Windows Store packaging identity). */
   store: boolean
+  /** True for a private Hermes Refocus side-by-side build (never a feed). */
+  refocus: boolean
   /** Display name. e.g. "Hermes Light" */
   displayName: string
   /** OS-level app identity. e.g. "com.nousresearch.hermes-light" */

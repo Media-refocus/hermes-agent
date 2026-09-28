@@ -1,0 +1,192 @@
+# Hermes Refocus — private Windows x64 canary candidate (NO publishing).
+#
+# Hand-dispatched build of the `refocus` desktop variant on a GitHub-hosted
+# Windows x64 runner. The candidate MSIX is uploaded as a private run
+# artifact; nothing is published — no releases, no R2 feed, no channel
+# descriptors, no Store submission. The job's token is read-only for the
+# repository (contents: read) and can only reach the artifact store.
+#
+# Identity: HERMES_DESKTOP_VARIANT=refocus + HERMES_BUILD_COMMIT (commit
+# build). The candidate installs side-by-side with the official Hermes —
+# its own appId (com.nousresearch.hermes-refocus-<sha7>), MSIX identity
+# (NousResearch.HermesRefocusCommit<sha7>), userData folder and CLI alias
+# (hermes-refocus-<sha7>). Updates stamp `external`: the app never checks
+# a feed; new candidates are manual installs.
+#
+# Signing: this build is UNSIGNED by design — no Azure Trusted Signing
+# credentials exist in this fork. The job FAILS CLOSED if signing vars are
+# unexpectedly present (wrong trust anchor) and again if the packaged MSIX
+# turns out signed. The summary says plainly that the unsigned MSIX is NOT
+# installable by normal double-click: sideloading requires Developer Mode
+# and Windows will flag the untrusted publisher. Installing it is an
+# explicit, manual decision.
+#
+# Untested: this workflow has never run on a Windows runner (no dispatch
+# was performed from this session). The first dispatch is the real test.
+
+name: Hermes Refocus Windows x64 candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Full 40-character commit SHA on the mis-perfiles branch to build
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hermes-refocus-win-x64-${{ inputs.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-x64-candidate:
+    name: Hermes Refocus MSIX (windows x64, unsigned, artifact only)
+    runs-on: windows-latest
+    timeout-minutes: 600
+    env:
+      BUILD_SHA: ${{ inputs.ref }}
+      CLOUDFLARE_R2_PUBLIC_URL: ''
+      ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Admit the exact commit (fail closed on anything else)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! [[ "$BUILD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::ref must be the full 40-character commit SHA (got: '$BUILD_SHA')"
+            exit 1
+          fi
+          checked="$(git rev-parse HEAD)"
+          if [ "$checked" != "$BUILD_SHA" ]; then
+            echo "::error::checkout resolved to $checked, not the admitted $BUILD_SHA"
+            exit 1
+          fi
+          echo "building commit $BUILD_SHA"
+
+      - name: Fail closed if signing credentials leak into this build
+        shell: bash
+        env:
+          AZURE_SIGN_ENDPOINT: ${{ vars.AZURE_SIGN_ENDPOINT }}
+          AZURE_SIGN_ACCOUNT: ${{ vars.AZURE_SIGN_ACCOUNT }}
+          AZURE_SIGN_PROFILE: ${{ vars.AZURE_SIGN_PROFILE }}
+          AZURE_SIGN_PUBLISHER: ${{ vars.AZURE_SIGN_PUBLISHER }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+        run: |
+          set -euo pipefail
+          present=""
+          for name in AZURE_SIGN_ENDPOINT AZURE_SIGN_ACCOUNT AZURE_SIGN_PROFILE AZURE_SIGN_PUBLISHER AZURE_CLIENT_ID AZURE_TENANT_ID; do
+            [ -n "${!name}" ] && present="$present $name"
+          done
+          if [ -n "$present" ]; then
+            echo "::error::Azure Trusted Signing vars are set ($present) but this private fork has no authorized certificate. A signed build would carry a trust anchor the refocus identity does not own. Unset them and re-run."
+            exit 1
+          fi
+
+      - name: Resolve the bootstrap Python (>= 3.11 for tomllib)
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.13'
+
+      # scripts/bundles/desktop.py is the one driver: it prepares the locked
+      # JS/Python/native toolchain and packages through
+      # apps/desktop/scripts/run-electron-builder.mjs, which always passes
+      # --publish never. The refocus guard in desktop.py additionally refuses
+      # a channel request, a release tag and a feed bucket URL. No step here
+      # touches any feed, release or store.
+      - name: Prepare the desktop build (refocus variant, commit identity)
+        shell: bash
+        env:
+          HERMES_DESKTOP_VARIANT: refocus
+          HERMES_BUILD_COMMIT: ${{ env.BUILD_SHA }}
+          PYTHONUTF8: '1'
+        run: |
+          set -euo pipefail
+          python scripts/bundles/desktop.py --commit "$HERMES_BUILD_COMMIT" --variant refocus \
+            --prepare-only --work "$RUNNER_TEMP/desktop-job" --cache "$RUNNER_TEMP/desktop-inputs"
+
+      - name: Build and package the candidate MSIX (no upload, no signing)
+        shell: bash
+        env:
+          HERMES_DESKTOP_VARIANT: refocus
+          HERMES_BUILD_COMMIT: ${{ env.BUILD_SHA }}
+          PYTHONUTF8: '1'
+        run: |
+          set -euo pipefail
+          python scripts/bundles/desktop.py --prepared "$RUNNER_TEMP/desktop-job/prepared.json" --variant refocus
+
+      - name: Verify the candidate identity (fail closed on official markers)
+        shell: bash
+        run: |
+          set -euo pipefail
+          node apps/desktop/scripts/refocus-verify-candidate.mjs "$BUILD_SHA"
+
+      - name: Verify the unsigned MSIX is present and honestly named
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msix = Get-ChildItem "apps/desktop/release" -Filter "HermesRefocus*.msix" |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $msix) {
+            $found = Get-ChildItem "apps/desktop/release" -File | Select-Object -ExpandProperty Name
+            Write-Output "::error::no HermesRefocus*.msix in apps/desktop/release; found: $($found -join ', ')"
+            exit 1
+          }
+          Write-Output "candidate: $($msix.Name) ($([math]::Round($msix.Length/1MB,1)) MB)"
+          "CANDIDATE_NAME=$($msix.Name)"   | Add-Content $env:GITHUB_ENV
+          "CANDIDATE_PATH=$($msix.FullName)" | Add-Content $env:GITHUB_ENV
+          $sig = Get-AuthenticodeSignature $msix.FullName
+          if ($sig.Status -ne 'NotSigned') {
+            Write-Output "::error::expected an UNSIGNED candidate, got signature status $($sig.Status). This workflow must not sign."
+            exit 1
+          }
+          Write-Output "Confirmed UNSIGNED (as designed — see the workflow header before installing)."
+
+      - name: Upload the private candidate artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hermes-refocus-win-x64-${{ inputs.ref }}
+          path: ${{ env.CANDIDATE_PATH }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Job summary — what this is and what it is not
+        shell: bash
+        run: |
+          {
+            echo "## Hermes Refocus — Windows x64 candidate (UNSIGNED)"
+            echo ""
+            echo "| fact | value |"
+            echo "|---|---|"
+            echo "| commit | \`${BUILD_SHA}\` |"
+            echo "| variant | \`refocus\` (commit build) |"
+            echo "| candidate | \`${CANDIDATE_NAME}\` |"
+            echo "| signed | **no** — no ATS certificate exists for this fork |"
+            echo "| published | **nothing** — artifact of this run only |"
+            echo ""
+            echo "### Install honesty"
+            echo "- This MSIX is **not double-click installable** as a trusted app:"
+            echo "  Windows requires an authorized signature for normal installs."
+            echo "- Sideload path (manual, at your own risk): enable Developer Mode /"
+            echo "  sideloading, then \`Add-AppxPackage -Path <candidate>\`. Windows will"
+            echo "  flag the untrusted publisher."
+            echo "- The candidate installs side-by-side with the official Hermes:"
+            echo "  its own appId, MSIX identity, userData folder and CLI alias"
+            echo "  (\`hermes-refocus-${BUILD_SHA:0:7}\`). No shared update feed."
+            echo "- Updates: none. The stamp says \`external\`; fetch a new candidate"
+            echo "  build manually when the branch moves."
+            echo ""
+            echo "### What was NOT tested"
+            echo "- This workflow has never executed on a Windows runner."
+            echo "- No install, launch, backend or update behavior has been proven"
+            echo "  on native Windows. The first dispatch is the real test."
+          } >> "$GITHUB_STEP_SUMMARY"

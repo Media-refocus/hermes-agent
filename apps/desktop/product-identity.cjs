@@ -19,12 +19,17 @@ const variants = {
     display: 'Hermes Agent',
     kebab: 'hermes-bundled',
     pascal: 'HermesBundled'
+  },
+  refocus: {
+    display: 'Hermes Refocus',
+    kebab: 'hermes-refocus',
+    pascal: 'HermesRefocus'
   }
 }
 
 const variant = process.env.HERMES_DESKTOP_VARIANT || ''
-if (!['', 'light', 'bundled', 'store'].includes(variant)) {
-  throw new Error(`Unknown HERMES_DESKTOP_VARIANT ${variant}. expected one of (empty), light, bundled, store`)
+if (!['', 'light', 'bundled', 'store', 'refocus'].includes(variant)) {
+  throw new Error(`Unknown HERMES_DESKTOP_VARIANT ${variant}. expected one of (empty), light, bundled, store, refocus`)
 }
 
 // 'store' is a Store-submission packaging identity layered on the bundled
@@ -42,6 +47,11 @@ const name = variants[store ? 'bundled' : (variant || '')]
 // never overwrite the stable feed file, and vice versa.
 const canary = /\+canary\.20\d{6}T\d{6}Z$/.test(process.env.HERMES_PAYLOAD_TAG || '')
 
+// 'refocus' is a private side-by-side build identity: the full bundled
+// packaging (agent payload, MSIX, own appId family) but never a release
+// feed, never the Store, and never the official package family.
+const refocus = variant === 'refocus'
+
 // Nonstable installs own their package family and local desktop state. The
 // seven-character commit suffix also names the CLI and fits MSIX's name cap.
 const buildCommitEnv = process.env.HERMES_BUILD_COMMIT || ''
@@ -54,9 +64,12 @@ const displayName = buildCommit
 
 const kebabSuffix = buildCommit ? `-${buildCommit}` : canary ? '-canary' : ''
 const pascalSuffix = buildCommit ? `Commit${buildCommit}` : canary ? 'Canary' : ''
-const cliName = `${light ? 'hermes-light' : 'hermes'}${kebabSuffix}`
+const cliName = `${light || refocus ? name.kebab : 'hermes'}${kebabSuffix}`
 if (store && (canary || buildCommit)) {
   throw new Error('Store packaging is only eligible for stable releases')
+}
+if (refocus && (canary || process.env.HERMES_PAYLOAD_TAG)) {
+  throw new Error('Refocus builds are commit builds; a release tag would claim the release namespace')
 }
 
 /** @typedef {import("./product-identity.d.cts")} ProductIdentity */
@@ -65,10 +78,12 @@ if (store && (canary || buildCommit)) {
 const identity = {
   store,
   light,
+  refocus,
   displayName,
   appId: `com.nousresearch.${name.kebab}${kebabSuffix}`,
-  // Store and commit builds do not publish a release feed.
-  channel: store || buildCommit ? null : light ? (canary ? 'light-canary' : 'light') : (canary ? 'canary' : 'latest'),
+  // Store and commit builds do not publish a release feed. Refocus owns its
+  // name-space only: it publishes nothing and subscribes to nothing.
+  channel: store || buildCommit || refocus ? null : light ? (canary ? 'light-canary' : 'light') : (canary ? 'canary' : 'latest'),
   appNamePascal: `${name.pascal}${pascalSuffix}`,
   artifactNamePascal: name.pascal,
   windowsExecutableName: kebabSuffix ? cliName : displayName,
@@ -90,5 +105,5 @@ const identity = {
 const { channelBuildRequest } = require('../../scripts/msix-shared.mjs')
 const request = channelBuildRequest()
 module.exports = request
-  ? Object.freeze({ ...request.identity, store: false, light: false, channel: request.channel })
+  ? Object.freeze({ ...request.identity, store: false, light: false, refocus: false, channel: request.channel })
   : identity

@@ -18,6 +18,7 @@ const { createMacSigner } = require('./scripts/mac-sign.mjs')
 const {
   light,
   store,
+  refocus,
   storeMsix,
   displayName,
   appId,
@@ -105,6 +106,8 @@ module.exports = {
     ...(channelRequest || appNamePascal !== artifactNamePascal ? { productName: displayName } : {}),
     desktopName: appId
   },
+  // A refocus build must never publish anywhere, even if a feed var leaks in.
+  ...(refocus ? { publish: null } : {}),
   directories: {
     output: 'release'
   },
@@ -126,7 +129,7 @@ module.exports = {
       from: 'build/install-stamp.json',
       to: 'install-stamp.json'
     },
-    ...(['bundled', 'store'].includes(process.env.HERMES_DESKTOP_VARIANT || '')
+    ...(['bundled', 'store', 'refocus'].includes(process.env.HERMES_DESKTOP_VARIANT || '')
       ? [{ from: 'build/agent-payload', to: 'agent-payload' }]
       : []),
     {

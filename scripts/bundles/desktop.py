@@ -63,6 +63,14 @@ def _build_prepared(prepared, builder_args: list[str], variant: str | None) -> N
     if request.channel_request is not None and not request.target.startswith(("darwin-", "win32-")):
         raise ValueError("channel builds require a supported native macOS or Windows target")
     variant = select_variant(prepared, variant)
+    if variant == "refocus":
+        # A side-by-side private build never rides the release feed pipeline.
+        if request.channel_request is not None:
+            raise ValueError("refocus builds cannot consume a channel request")
+        if request.tag is not None:
+            raise ValueError("refocus builds are commit builds, not release tags")
+        if os.environ.get("CLOUDFLARE_R2_PUBLIC_URL"):
+            raise ValueError("refocus builds must not publish to a feed bucket")
     repo, node = request.source, str(prepared.node)
     env = build_environment(prepared, variant, os.environ)
     if request.release_epoch is not None:
@@ -114,7 +122,7 @@ def main() -> None:
                              "version comes from the target pyproject, no tag is referenced")
     parser.add_argument("--release-commit", help="Admitted commit for a stable tag not created until green")
     parser.add_argument("--channel-request", type=Path, help="Immutable admitted channel request JSON")
-    parser.add_argument("--variant", choices=["bundled", "store", "light"])
+    parser.add_argument("--variant", choices=["bundled", "store", "light", "refocus"])
     parser.add_argument("--repo", type=Path, default=ROOT)
     parser.add_argument("--work", type=Path)
     parser.add_argument("--cache", type=Path)
