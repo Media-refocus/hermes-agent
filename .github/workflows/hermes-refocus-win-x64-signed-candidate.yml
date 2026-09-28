@@ -119,8 +119,8 @@ jobs:
       - name: Refuse unpinned certificate configuration before secret use
         shell: pwsh
         env:
-          PINNED_THUMBPRINT: 'SET_FIXED_40_HEX_CERT_THUMBPRINT_BEFORE_ENABLE'
-          PINNED_SUBJECT: 'SET_FIXED_EXACT_CERT_SUBJECT_BEFORE_ENABLE'
+          PINNED_THUMBPRINT: 'F07F1CDCCE95D48EB53ED0AAA0CF29610B8F55B6'
+          PINNED_SUBJECT: 'CN=Refocus Development'
           CONFIGURED_SUBJECT: ${{ vars.REFOCUS_MSIX_EXPECTED_SUBJECT }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -132,7 +132,7 @@ jobs:
         id: package
         shell: pwsh
         env:
-          PINNED_SUBJECT: 'SET_FIXED_EXACT_CERT_SUBJECT_BEFORE_ENABLE'
+          PINNED_SUBJECT: 'CN=Refocus Development'
           CONFIGURED_SUBJECT: ${{ vars.REFOCUS_MSIX_EXPECTED_SUBJECT }}
           BUILD_EPOCH: ${{ needs.build-candidate.outputs.epoch }}
         run: |
@@ -163,8 +163,8 @@ jobs:
         env:
           HERMES_MSIX_PFX_B64: ${{ secrets.HERMES_MSIX_PFX_B64 }}
           HERMES_MSIX_PFX_PASSWORD: ${{ secrets.HERMES_MSIX_PFX_PASSWORD }}
-          PINNED_THUMBPRINT: 'SET_FIXED_40_HEX_CERT_THUMBPRINT_BEFORE_ENABLE'
-          PINNED_SUBJECT: 'SET_FIXED_EXACT_CERT_SUBJECT_BEFORE_ENABLE'
+          PINNED_THUMBPRINT: 'F07F1CDCCE95D48EB53ED0AAA0CF29610B8F55B6'
+          PINNED_SUBJECT: 'CN=Refocus Development'
           MSIX: ${{ steps.package.outputs.MSIX }}
         run: |
           $ErrorActionPreference = 'Stop'

@@ -74,10 +74,13 @@ it('keeps PFX references inside the signing step and uses real signtool signing 
   expect(signing.run).toContain('Remove-Item -LiteralPath $pfx')
 })
 
-it('cannot sign until external environment verification and independent certificate pins are supplied', () => {
+it('pins one signer identity consistently and still refuses unpinned configuration', () => {
   const gate = step(sign, 'Refuse unpinned certificate configuration before secret use')
-  expect(gate.env.PINNED_THUMBPRINT).toBe('SET_FIXED_40_HEX_CERT_THUMBPRINT_BEFORE_ENABLE')
-  expect(gate.env.PINNED_SUBJECT).toBe('SET_FIXED_EXACT_CERT_SUBJECT_BEFORE_ENABLE')
+  const signing = step(sign, 'Sign with the protected PFX (signtool)')
+  expect(gate.env.PINNED_THUMBPRINT).toMatch(/^[0-9A-F]{40}$/)
+  expect(gate.env.PINNED_SUBJECT).toBe('CN=Refocus Development')
+  expect(signing.env.PINNED_THUMBPRINT).toBe(gate.env.PINNED_THUMBPRINT)
+  expect(signing.env.PINNED_SUBJECT).toBe(gate.env.PINNED_SUBJECT)
   expect(gate.run).toContain('Fixed signer thumbprint/subject pins are unset')
   expect(readFileSync(new URL('../.github/workflows/hermes-refocus-win-x64-signed-candidate.yml', import.meta.url), 'utf8'))
     .toMatch(/GitHub Actions cannot prove a named environment has required reviewers from\s+# YAML alone/)
