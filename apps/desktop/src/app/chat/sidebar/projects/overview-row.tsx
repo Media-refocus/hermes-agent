@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils'
 import { $sidebarShowAllSessions } from '@/store/layout'
 import { fetchProjectSessions, projectProfile } from '@/store/projects'
 
+import { MyProfilesProjectChips } from '../my-profiles-project-chips'
 import {
   SIDEBAR_LEAD_ICON_SIZE,
   SidebarGroupRow,
@@ -81,6 +82,7 @@ export function ProjectBackRow({ label, onClick }: { label: string; onClick: () 
 
 interface ProjectOverviewRowProps {
   project: SidebarProjectTree
+  myProfilesProjects?: readonly SidebarProjectTree[]
   onEnter?: (id: string) => void
   onNewSession?: (path: null | string) => void
   /** Drag the project's "+" onto a chat zone: create a new session pinned to
@@ -105,6 +107,7 @@ interface ProjectOverviewRowProps {
 
 export function ProjectOverviewRow({
   project,
+  myProfilesProjects,
   onEnter,
   onNewSession,
   onNewSessionSplit,
@@ -232,7 +235,12 @@ export function ProjectOverviewRow({
       }
       className={cn(dragging && 'cursor-grabbing bg-(--ui-sidebar-surface-background)')}
       data-glass-opaque={dragging ? '' : undefined}
-      label={project.isAuto ? <Tip label={s.projects.autoDiscovered}>{labelLink}</Tip> : labelLink}
+      label={
+        <>
+          {project.isAuto ? <Tip label={s.projects.autoDiscovered}>{labelLink}</Tip> : labelLink}
+          {myProfilesProjects && <MyProfilesProjectChips project={project} projects={myProfilesProjects} />}
+        </>
+      }
       lead={lead}
       // The label is grab surface too, not just the lead's grabber — the
       // pointer activator only (the full handle stays on the grabber, see

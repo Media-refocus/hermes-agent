@@ -3079,6 +3079,7 @@ export interface Translations {
       reorder: (label: string) => string
       toggle: (label: string, open: boolean) => string
       showAllCount: (count: number) => string
+      duplicateProjectHint: (name: string, locations: string) => string
       back: string
     }
     newSessionIn: (label: string) => string

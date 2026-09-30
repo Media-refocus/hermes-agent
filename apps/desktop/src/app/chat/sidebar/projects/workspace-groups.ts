@@ -50,6 +50,12 @@ export interface SidebarWorkspaceTree {
   sessionCount: number
 }
 
+/** A backend identity: one profile reached through one gateway connection. */
+export interface SidebarProjectOwnerRoute {
+  connectionId: string
+  profile: string
+}
+
 /** A project node: human-named (or repo-derived), holds its repo subtree. */
 export interface SidebarProjectTree {
   id: string
@@ -58,6 +64,9 @@ export interface SidebarProjectTree {
   color?: null | string
   icon?: null | string
   archived?: boolean
+  /** Owner routes this row was merged from («Mis perfiles» scope only; see
+   *  `namespaceMyProfilesProjectTree`). Absent on single-backend trees. */
+  myProfileOwnerRoutes?: SidebarProjectOwnerRoute[]
   // A git repo root promoted automatically (not a user-created projects.db row).
   // Deletable = dismissable.
   isAuto?: boolean
@@ -119,6 +128,13 @@ const pathKey = (path: null | string | undefined): string => comparisonSegments(
 
 /** Last path segment. */
 export const baseName = (path: string): string | undefined => segments(path).pop()
+
+/**
+ * Case/trim-folded project-name key for «Mis perfiles» duplicate detection:
+ * two rows whose labels fold to the same key are the same name seen on more
+ * than one owner route — worth a mark even when their paths differ.
+ */
+export const myProfilesProjectNameKey = (label: string): string => label.trim().toLowerCase()
 
 // The `.worktrees` dir for a KANBAN-TASK worktree path, else null. Only matches
 // task worktrees (`<repo>/.worktrees/t_<hex>`, the `t_…` id kanban_db mints) so

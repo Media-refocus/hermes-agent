@@ -262,4 +262,33 @@ describe('my-profiles merged project overview (two gateways)', () => {
     expect(screen.getByText('Alpha twin on B')).toBeTruthy()
     expect(screen.queryByText('Alpha on A')).toBeNull()
   })
+
+  it('shows owner chips and duplicate locations only in the Mis perfiles overview', () => {
+    const a = makeSessionInfo({ id: 'a1', profile: 'bulma', connection_id: 'gw-a', cwd: '/a', title: 'A project' })
+    const b = makeSessionInfo({ id: 'b1', profile: 'goku', connection_id: 'gw-b', cwd: '/b', title: 'B project' })
+    const projectA = { ...backendTree('p_a', '/a', [a]), label: '  Atlas  ' }
+    const projectB = { ...backendTree('p_b', '/b', [b]), label: 'atlas' }
+
+    act(() => {
+      setMyProfilesProjectTree(mergeMyProfilesProjectTrees([
+        namespaceMyProfilesProjectTree({ connectionId: 'gw-a', profile: 'bulma' }, { projects: [projectA] }),
+        namespaceMyProfilesProjectTree({ connectionId: 'gw-b', profile: 'goku' }, { projects: [projectB] })
+      ]))
+      $sessions.set([a, b])
+      setShowMyProfiles(true)
+    })
+
+    const { container, unmount } = mount()
+    expect(container.querySelectorAll('[data-owner-chip][data-profile]').length).toBeGreaterThanOrEqual(2)
+    expect(container.querySelectorAll('[data-duplicate-project="true"]')).toHaveLength(2)
+    // Locale-neutral: the harness runs the default (en) catalog, but the
+    // semantic requirement is the duplicate hint, not its language.
+    expect(screen.getAllByLabelText(/Posible proyecto duplicado|Possible duplicate project/)).toHaveLength(2)
+
+    unmount()
+    act(() => setShowMyProfiles(false))
+    const outside = mount()
+    expect(outside.container.querySelector('[data-owner-chip]')).toBeNull()
+  })
+
 })

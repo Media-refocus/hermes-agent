@@ -134,6 +134,8 @@ interface SidebarSessionsSectionProps {
   // which then passes `projectContent` on the next render. Takes precedence
   // over `tree` / `groups`.
   projectOverview?: SidebarProjectTree[]
+  /** Owner-route chips are scoped exclusively to «Mis perfiles». */
+  myProfilesOwners?: boolean
   // Per-project preview rows (from the backend tree), keyed by project id.
   projectOverviewPreviews?: Record<string, SessionInfo[]>
   // The exclusion the previews were built with (pins, filter misses, removed
@@ -218,6 +220,7 @@ export function SidebarSessionsSection({
   groups,
   embeddedGroups = false,
   projectOverview,
+  myProfilesOwners = false,
   projectOverviewPreviews,
   projectOverviewHidden,
   projectsLoading = false,
@@ -528,6 +531,7 @@ export function SidebarSessionsSection({
         hiddenSessionCount={projectOverviewHidden?.counts[project.id]}
         isSessionHidden={projectOverviewHidden?.isHidden}
         key={project.id}
+        myProfilesProjects={myProfilesOwners ? projectOverview : undefined}
         onEnter={onEnterProject}
         onNewSession={onNewSessionInWorkspace}
         onNewSessionSplit={onNewSessionSplit}

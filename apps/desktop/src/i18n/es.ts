@@ -4020,7 +4020,8 @@ export const esOverrides = {
       enter: label => `Abrir ${label}`,
       reorder: label => `Reordenar ${label}`,
       toggle: (label, open) => `${open ? 'Mostrar' : 'Ocultar'} sesiones de ${label}`,
-      showAllCount: (count: number) => `Mostrar las ${count} sesiones`,
+      showAllCount: count => `Mostrar todas las ${count} sesiones`,
+      duplicateProjectHint: (name, locations) => `Posible proyecto duplicado «${name}» — aparece en ${locations}`,
       back: 'Todos los proyectos'
     },
     newSessionIn: label => `Nueva sesión en ${label}`,

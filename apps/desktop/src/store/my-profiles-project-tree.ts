@@ -101,6 +101,7 @@ export function namespaceMyProfilesProjectTree(
 
     projects.push({
       ...project,
+      myProfileOwnerRoutes: home ? [] : [{ connectionId: route.connectionId, profile: route.profile }],
       id: home ? routeHomeId(route) : namespacedId(route, project.id),
       path: project.path ?? null,
       sessionCount: project.sessionCount ?? 0,
@@ -236,6 +237,17 @@ export function mergeMyProfilesProjectTrees(routeTrees: SidebarProjectTree[][]):
       if (!seen.has(project.id)) {
         seen.add(project.id)
         ordered.push(project)
+      } else {
+        const existing = ordered.find(entry => entry.id === project.id)
+
+        if (existing) {
+          existing.myProfileOwnerRoutes = [
+            ...(existing.myProfileOwnerRoutes ?? []),
+            ...(project.myProfileOwnerRoutes ?? [])
+          ].filter((route, index, routes) => routes.findIndex(other =>
+            other.connectionId === route.connectionId && other.profile === route.profile
+          ) === index)
+        }
       }
     }
   }

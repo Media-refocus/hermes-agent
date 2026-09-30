@@ -3645,6 +3645,7 @@ export const en: Translations = {
       reorder: label => `Reorder ${label}`,
       toggle: (label, open) => `${open ? 'Show' : 'Hide'} ${label} sessions`,
       showAllCount: count => `Show all ${count} sessions`,
+      duplicateProjectHint: (name, locations) => `Possible duplicate project “${name}” — found in ${locations}`,
       back: 'All projects'
     },
     newSessionIn: label => `New session in ${label}`,
