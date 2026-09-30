@@ -291,4 +291,40 @@ describe('my-profiles merged project overview (two gateways)', () => {
     expect(outside.container.querySelector('[data-owner-chip]')).toBeNull()
   })
 
+  it('scrolls Pinned and Projects in one shared container in the Mis perfiles overview', () => {
+    const a = makeSessionInfo({ id: 'a1', profile: 'bulma', connection_id: 'gw-a', cwd: '/a', title: 'A project' })
+    const projectA = { ...backendTree('p_a', '/a', [a]), label: 'Atlas' }
+
+    act(() => {
+      setMyProfilesProjectTree(
+        mergeMyProfilesProjectTrees([
+          namespaceMyProfilesProjectTree({ connectionId: 'gw-a', profile: 'bulma' }, { projects: [projectA] })
+        ])
+      )
+      $sessions.set([a])
+    })
+
+    const { container } = mount()
+
+    // The shared scroll owner is SidebarContent: with Pinned expanded, exactly
+    // one scrollport is an ancestor of both it and the Projects overview, so
+    // the wheel travels from Pinned through every project without meeting a
+    // nested scroller.
+    const pinnedHeader = screen.getByText('Pinned')
+    const projectMode = container.querySelector('[data-sessions-mode="projects"]')
+    expect(projectMode).toBeTruthy()
+    const scrollableAncestors = (node: HTMLElement) => {
+      const result: HTMLElement[] = []
+      let current: HTMLElement | null = node
+      while (current) {
+        if (/(^|\s)(overflow-y-auto|overflow-y-scroll)(\s|$)/.test(current.className)) result.push(current)
+        current = current.parentElement
+      }
+      return result
+    }
+    const common = scrollableAncestors(pinnedHeader as HTMLElement).filter(node =>
+      scrollableAncestors(projectMode as HTMLElement).includes(node)
+    )
+    expect(common).toHaveLength(1)
+  })
 })

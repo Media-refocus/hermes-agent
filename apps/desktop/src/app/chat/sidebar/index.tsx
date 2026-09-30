@@ -1542,6 +1542,14 @@ export function ChatSidebar({
     !(inProject && enteredProjectContent) &&
     displayAgentSessions.length >= VIRTUALIZE_THRESHOLD
 
+  // «Mis perfiles» flattens Pinned + Projects (+ everything below) into ONE
+  // scroll owned by SidebarContent, so with Pinned expanded the wheel travels
+  // straight through every project. Exception: a flat recents list big enough
+  // to virtualize keeps the legacy per-section layout — the virtualizer needs
+  // a bounded viewport and owns its own scroller, so a page-level scroller
+  // around it would just be a second, competing scrollport.
+  const myProfilesSingleScroll = myProfilesScope && !recentsVirtualizes
+
   // Keep the persisted parent + worktree orders reconciled with what's on screen:
   // freshly-seen repos/worktrees surface at the top, vanished ones drop out of
   // the saved order.
@@ -1629,7 +1637,19 @@ export function ChatSidebar({
       data-tip-region=""
       data-tour="sessions-sidebar"
     >
-      <SidebarContent className="gap-0 overflow-hidden bg-transparent px-2.5">
+      {/* «Mis perfiles» makes this the ONE scroll owner: Pinned, Projects and
+          everything below share SidebarContent's scrollport, so with Pinned
+          expanded the wheel travels from Pinned straight through every project
+          without meeting a nested scroller. Exception: a flat recents list big
+          enough to virtualize keeps the legacy layout — the virtualizer needs
+          a bounded viewport and owns its own scroller, so this stays clipped
+          and the sessions wrapper scrolls, exactly as outside the scope. */}
+      <SidebarContent
+        className={cn(
+          'gap-0 bg-transparent px-2.5',
+          myProfilesSingleScroll ? SCROLL_GUTTER : 'overflow-hidden'
+        )}
+      >
         <SidebarGroup className="shrink-0 p-0 pb-2 pt-[calc(var(--titlebar-height)+0.375rem)]">
           <SidebarGroupContent>
             <SidebarMenu className="gap-px">
@@ -1777,14 +1797,20 @@ export function ChatSidebar({
 
         {showSessionSections && (
           <div
-            className={cn('flex min-h-0 flex-1 flex-col pb-1.75', SCROLL_Y, SCROLL_GUTTER)}
+            className={cn(
+              'flex min-h-0 flex-1 flex-col pb-1.75',
+              myProfilesSingleScroll ? 'flex-none overflow-visible' : cn(SCROLL_Y, SCROLL_GUTTER)
+            )}
             data-sessions-mode={sessionsMode}
             data-sessions-project={inProject ? (enteredProjectId ?? undefined) : undefined}
           >
             {trimmedQuery && (
               <SidebarSessionsSection
                 activeSessionId={activeSidebarSessionId}
-                contentClassName={cn('flex min-h-0 flex-1 flex-col gap-px pb-1.75', SCROLL_Y)}
+                contentClassName={cn(
+                  'flex min-h-0 flex-1 flex-col gap-px pb-1.75',
+                  myProfilesSingleScroll ? 'flex-none overflow-visible' : SCROLL_Y
+                )}
                 emptyState={
                   searchPending ? (
                     <SidebarSessionSkeletons />
@@ -1885,14 +1911,7 @@ export function ChatSidebar({
                 collapsible={!inProject}
                 contentClassName={cn(
                   'flex min-h-0 flex-1 flex-col gap-px pb-1.75',
-                  // The section is the ONE authority on whether the virtual
-                  // list owns scrolling: it neutralizes this wrapper scroller
-                  // itself (overflow-visible) when it virtualizes. Gating
-                  // SCROLL_Y here on index's own parallel guess desynced the
-                  // two — a cached project tree flipped this side but not the
-                  // section's, leaving the list with no scroller at all and
-                  // the recents pane rendering blank under Updated grouping.
-                  SCROLL_Y,
+                  myProfilesSingleScroll ? 'flex-none overflow-visible' : SCROLL_Y,
                   // Flatten into the single scroll when compact — unless this is the
                   // virtualized long list, which must keep its own scroller.
                   !recentsVirtualizes && COMPACT_FLAT
@@ -2064,8 +2083,8 @@ export function ChatSidebar({
                 projectsLoading={worktreeGroupingActive ? projectTreeLoading : false}
                 removedSessionIds={inProject ? removedSessionIds : undefined}
                 rootClassName={cn(
-                  'min-h-32 flex-1 overflow-hidden p-0',
-                  !recentsVirtualizes && 'compact:min-h-0 compact:flex-none compact:overflow-visible'
+                  myProfilesSingleScroll ? 'shrink-0 overflow-visible p-0' : 'min-h-32 flex-1 overflow-hidden p-0',
+                  !myProfilesSingleScroll && !recentsVirtualizes && 'compact:min-h-0 compact:flex-none compact:overflow-visible'
                 )}
                 sessions={displayAgentSessions}
                 sortable={!showAllProfiles && agentSessions.length > 1}
